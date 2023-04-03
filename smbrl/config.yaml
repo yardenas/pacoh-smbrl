@@ -1,0 +1,39 @@
+training:
+  safe: True
+  cost_limit: 25
+  log_dir: results
+  seed: 0
+  time_limit: 1000
+  episodes_per_task: 5
+  eval_episodes_per_task: 1
+  epochs: 200
+  eval_every: 5
+  action_repeat: 1
+  render_episodes: 1
+  render_options: { camera_id: "fixedfar" }
+  jit: True
+  precision: 32
+  parallel_envs: 20
+  task_batch_size: 20
+  scale_reward: 1.
+
+sadam:
+  replay_buffer:
+    batch_size: 128
+    sequence_length: 64
+    capacity: 1000
+  model:
+    n_layers: 2
+    hippo_n: 64
+    hidden_size: 128
+  model_optimizer:
+    lr: 3e-4
+    eps: 1e-5
+    clip: 0.5
+  cem:
+    num_particles: 100
+    num_iters: 10
+    num_elite: 10
+    stop_cond: 0.1
+  plan_horizon: 15
+  update_steps: 100
