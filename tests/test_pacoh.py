@@ -4,8 +4,8 @@ import equinox as eqx
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
-import optax
 import numpy as np
+import optax
 
 import smbrl.pacoh_nn as pacoh
 
@@ -26,7 +26,7 @@ class SinusoidRegression:
     @property
     def train_set(
         self,
-    ) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+    ):
         while True:
             yield self._make_batch(self.num_train_shots)[0]
 
@@ -37,7 +37,7 @@ class SinusoidRegression:
         while True:
             yield self._make_batch(self.num_test_shots)
 
-    def _make_batch(self, num_shots: int) -> Tuple[np.ndarray, np.ndarray]:
+    def _make_batch(self, num_shots):
         # Select amplitude and phase for the task
         amplitudes = []
         phases = []
@@ -45,7 +45,7 @@ class SinusoidRegression:
             amplitudes.append(self.rs.uniform(low=0.1, high=0.75))
             phases.append(self.rs.uniform(low=-np.pi, high=np.pi))
 
-        def get_batch(num_shots: int) -> Tuple[np.ndarray, np.ndarray]:
+        def get_batch(num_shots):
             xs, ys = [], []
             for amplitude, phase in zip(amplitudes, phases):
                 if num_shots > 0:
@@ -93,16 +93,15 @@ def test_training():
     hyper_posterior = pacoh.meta_train(
         dataset.train_set, hyper_prior, hyper_posterior, opt, opt_state, 1000, 10
     )
-    easy_dataset = SinusoidRegression(16, 5, 100)
     infer_posteriors = jax.vmap(
-        pacoh.infer_posterior, in_axes=(0, 0, None, None, None, None, None)
+        pacoh.infer_posterior, in_axes=(0, 0, None, None, None, None)
     )
     key, next_key = jax.random.split(key)
-    (context_x, context_y), (test_x, test_y) = next(easy_dataset.test_set)
+    (context_x, context_y), (test_x, test_y) = next(dataset.test_set)
     posteriors, losses = infer_posteriors(
         context_x, context_y, hyper_posterior, next_key, 1000, 3e-4
     )
-    predict = jax.vmap(predict, (0, 0, None))
-    predictions = predict(posteriors, test_x, apply)
-    posteriors = hyper_posterior.sample(next(seed_sequence), 1)
-    predict(posteriors, test_x, apply)
+    # predict = jax.vmap(predict, (0, 0, None))
+    # predictions = predict(posteriors, test_x, apply)
+    # posteriors = hyper_posterior.sample(next(seed_sequence), 1)
+    # predict(posteriors, test_x, apply)

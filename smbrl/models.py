@@ -90,7 +90,7 @@ class ParamsDistribution(NamedTuple):
 
     def log_prob(self, other: PyTree) -> jax.Array:
         dist, self_flat_params, _ = self._to_dist()
-        flat_params, _ = jax.tree_util.ravel_pytree(other)
+        flat_params, _ = jax.flatten_util.ravel_pytree(other)
         if len(flat_params) != len(self_flat_params):
             quotient, remainder = divmod(len(flat_params), len(self_flat_params))
             assert (
@@ -108,8 +108,8 @@ class ParamsDistribution(NamedTuple):
     def _to_dist(
         self,
     ) -> tuple[distrax.Distribution, jax.Array, Callable[[jax.Array], PyTree]]:
-        self_flat_mus, pytree_def = jax.tree_util.ravel_pytree(self.mus)
-        self_flat_stddevs, _ = jax.tree_util.ravel_pytree(self.stddev)
+        self_flat_mus, pytree_def = jax.flatten_util.ravel_pytree(self.mus)
+        self_flat_stddevs, _ = jax.flatten_util.ravel_pytree(self.stddev)
         dist = distrax.MultivariateNormalDiag(
             self_flat_mus, jnp.ones_like(self_flat_mus) * self_flat_stddevs
         )

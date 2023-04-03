@@ -1,11 +1,12 @@
 import copy
 import functools
 
+import distrax
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import distrax
 
 from smbrl.models import ParamsDistribution
 
@@ -37,7 +38,7 @@ def meta_train(
     return hyper_posterior
 
 
-@functools.partial(jax.jit, static_argnums=(2, 5, 6))
+@functools.partial(jax.jit, static_argnums=(5, 6))
 def train_step(
     meta_batch_x,
     meta_batch_y,
@@ -95,7 +96,12 @@ def particle_loss(
 ):
     def estimate_mll(x, y):
         prior_samples = particle.sample(key, n_prior_samples)
-        per_sample_pred = jax.vmap(prior_samples, (0, None))
+        # First vmap along the batch dimension.
+        evaluate_ensemble = lambda model, x: jax.vmap(model)(x)
+        # then vmap over members of the ensemble.
+        per_sample_pred = eqx.filter_vmap(
+            evaluate_ensemble, in_axes=(eqx.if_array(0), None)
+        )
         y_hat, stddevs = per_sample_pred(prior_samples, x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
         batch_size = x.shape[0]
