@@ -4,9 +4,10 @@ import equinox as eqx
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
+import optax
 import numpy as np
 
-from smbrl.models import ParamsDistribution
+import smbrl.pacoh_nn as pacoh
 
 
 class SinusoidRegression:
@@ -82,41 +83,24 @@ class Heterescedastic(eqx.Module):
 
 
 def test_training():
-
-    import jax
-    import jax.numpy as jnp
-    import optax
-
-    import smbrl.pacoh_nn as pacoh
-
     dataset = SinusoidRegression(16, 5, 5)
     make_model = lambda key: Heterescedastic(1, 16, 1, key)
     key = jax.random.PRNGKey(0)
-    model = make_model(key)
-    mean_prior_over_mus = jax.tree_map(jnp.zeros_like, model)
-    mean_prior_over_stddevs = jax.tree_map(jnp.zeros_like, mean_prior_over_mus)
-    hyper_prior = ParamsDistribution(
-        ParamsDistribution(mean_prior_over_mus, mean_prior_over_stddevs),
-        1.0,
-    )
-    n_particles = 10
-    init = jax.vmap(make_model)
-    particles_mus = init(jnp.asarray(jax.random.split(key, n_particles)))
-    particle_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * 1e-4, particles_mus)
-    hyper_posterior = ParamsDistribution(particles_mus, particle_stddevs)
+    hyper_prior = pacoh.make_hyper_prior(make_model(key))
+    hyper_posterior = pacoh.make_hyper_posterior(make_model, key, 10)
     opt = optax.flatten(optax.adam(3e-4))
     opt_state = opt.init(hyper_posterior)
     hyper_posterior = pacoh.meta_train(
-        dataset.train_set, apply, hyper_prior, hyper_posterior, opt, opt_state, 1000, 10
+        dataset.train_set, hyper_prior, hyper_posterior, opt, opt_state, 1000, 10
     )
     easy_dataset = SinusoidRegression(16, 5, 100)
     infer_posteriors = jax.vmap(
         pacoh.infer_posterior, in_axes=(0, 0, None, None, None, None, None)
     )
-
+    key, next_key = jax.random.split(key)
     (context_x, context_y), (test_x, test_y) = next(easy_dataset.test_set)
     posteriors, losses = infer_posteriors(
-        context_x, context_y, hyper_posterior, apply, next(seed_sequence), 1000, 3e-4
+        context_x, context_y, hyper_posterior, next_key, 1000, 3e-4
     )
     predict = jax.vmap(predict, (0, 0, None))
     predictions = predict(posteriors, test_x, apply)

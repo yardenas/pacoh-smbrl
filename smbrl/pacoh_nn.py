@@ -12,7 +12,6 @@ from smbrl.models import ParamsDistribution
 
 def meta_train(
     data,
-    prediction_fn,
     hyper_prior,
     hyper_posterior,
     optimizer,
@@ -26,7 +25,6 @@ def meta_train(
         hyper_posterior, opt_state, log_probs = train_step(
             meta_batch_x,
             meta_batch_y,
-            prediction_fn,
             hyper_prior,
             hyper_posterior,
             jax.random.PRNGKey(0),
@@ -39,11 +37,10 @@ def meta_train(
     return hyper_posterior
 
 
-@functools.partial(jax.jit, static_argnums=(2, 6, 7))
+@functools.partial(jax.jit, static_argnums=(2, 5, 6))
 def train_step(
     meta_batch_x,
     meta_batch_y,
-    prediction_fn,
     hyper_prior,
     hyper_posterior,
     key,
@@ -55,7 +52,6 @@ def train_step(
         lambda hyper_posterior: particle_loss(
             meta_batch_x,
             meta_batch_y,
-            prediction_fn,
             hyper_posterior,
             hyper_prior,
             key,
@@ -92,7 +88,6 @@ def _to_matrix(params, num_particles):
 def particle_loss(
     meta_batch_x,
     meta_batch_y,
-    prediction_fn,
     particle,
     hyper_prior,
     key,
@@ -100,7 +95,7 @@ def particle_loss(
 ):
     def estimate_mll(x, y):
         prior_samples = particle.sample(key, n_prior_samples)
-        per_sample_pred = jax.vmap(prediction_fn, (0, None))
+        per_sample_pred = jax.vmap(prior_samples, (0, None))
         y_hat, stddevs = per_sample_pred(prior_samples, x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
         batch_size = x.shape[0]
@@ -136,44 +131,53 @@ def infer_posterior(
     x,
     y,
     hyper_posterior,
-    prediction_fn,
     key,
     update_steps,
     learning_rate,
 ):
     # Sample prior parameters from the hyper-posterior to form an ensemble
     # of neural networks.
-    posterior_params = hyper_posterior.sample(key, 1)
-    posterior_params = jax.tree_util.tree_map(
-        lambda x: x.reshape((-1,) + x.shape[2:]), posterior_params
-    )
+    prior = hyper_posterior.sample(key, 1)
+    prior = jax.tree_util.tree_map(lambda x: x.reshape((-1,) + x.shape[2:]), prior)
     optimizer = optax.flatten(optax.adam(learning_rate))
-    opt_state = optimizer.init(posterior_params)
+    opt_state = optimizer.init(prior)
 
-    def loss(params):
-        y_hat, stddevs = prediction_fn(params, x)
+    def loss(model):
+        y_hat, stddevs = model(x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
         return -log_likelihood.mean()
 
     def update(carry, _):
-        posterior_params, opt_state = carry
-        values, grads = jax.vmap(jax.value_and_grad(loss))(posterior_params)
+        model, opt_state = carry
+        values, grads = jax.vmap(jax.value_and_grad(loss))(model)
         updates, opt_state = optimizer.update(grads, opt_state)
-        posterior_params = optax.apply_updates(posterior_params, updates)
-        return (posterior_params, opt_state), values.mean()
+        model = optax.apply_updates(model, updates)
+        return (model, opt_state), values.mean()
 
-    (posterior_params, _), losses = jax.lax.scan(
-        update, (posterior_params, opt_state), None, update_steps
-    )
-    return posterior_params, losses
+    (prior, _), losses = jax.lax.scan(update, (prior, opt_state), None, update_steps)
+    return prior, losses
 
 
 @functools.partial(jax.jit, static_argnums=(2))
-def predict(
-    posterior,
-    x,
-    prediction_fn,
-):
-    prediction_fn = jax.vmap(prediction_fn, in_axes=(0, None))
-    y_hat, stddev = prediction_fn(posterior, x)
+def predict(posterior, x):
+    prediction_fn = jax.vmap(posterior, in_axes=(0, None))
+    y_hat, stddev = prediction_fn(x)
     return y_hat, stddev
+
+
+def make_hyper_prior(model):
+    mean_prior_over_mus = jax.tree_map(jnp.zeros_like, model)
+    mean_prior_over_stddevs = jax.tree_map(jnp.zeros_like, mean_prior_over_mus)
+    hyper_prior = ParamsDistribution(
+        ParamsDistribution(mean_prior_over_mus, mean_prior_over_stddevs),
+        1.0,
+    )
+    return hyper_prior
+
+
+def make_hyper_posterior(make_model, key, n_particles):
+    init_ensemble = jax.vmap(make_model)
+    particles_mus = init_ensemble(jnp.asarray(jax.random.split(key, n_particles)))
+    particle_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * 1e-4, particles_mus)
+    hyper_posterior = ParamsDistribution(particles_mus, particle_stddevs)
+    return hyper_posterior
