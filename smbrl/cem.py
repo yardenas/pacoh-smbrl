@@ -13,13 +13,13 @@ def make_objective(
     model: m.Model,
     horizon: int,
     initial_state: jax.Array,
-    ssm: list[SSM],
 ) -> ObjectiveFn:
     def objective(samples):
         sample = lambda x: model.sample(
             horizon,
             initial_state,
             key=jax.random.PRNGKey(0),
+            action_sequence=x
         )
         preds = jax.vmap(sample)(samples)
         return preds.reward.mean(axis=(1, 2))

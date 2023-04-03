@@ -46,7 +46,6 @@ class SMBRL:
         self.model = Model(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
-            sequence_length=config.smbrl.replay_buffer.sequence_length,
             key=self.prng,
             **config.smbrl.model,
         )
@@ -60,7 +59,7 @@ class SMBRL:
         normalized_obs = _normalize(
             observation, self.obs_normalizer.result.mean, self.obs_normalizer.result.std
         )
-        action, self.hidden = self.policy(
+        action = self.policy(
             normalized_obs,
             self.model,
         )
@@ -131,7 +130,7 @@ class SMBRL:
             next_state_sequence,
             reward_sequence,
         ):
-            preds = jax.vmap(model)(state_sequence, action_sequence)[1]
+            preds = jax.vmap(model)(state_sequence, action_sequence)
             state_loss = (preds.next_state - next_state_sequence) ** 2
             reward_loss = (preds.reward.squeeze(-1) - reward_sequence) ** 2
             return 0.5 * (state_loss.mean() + reward_loss.mean())
