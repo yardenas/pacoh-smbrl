@@ -13,16 +13,12 @@ def make_objective(
     model: m.Model,
     horizon: int,
     initial_state: jax.Array,
-    initial_hidden: list[jax.Array],
     ssm: list[SSM],
 ) -> ObjectiveFn:
     def objective(samples):
         sample = lambda x: model.sample(
             horizon,
             initial_state,
-            initial_hidden,
-            action_sequence=x,
-            ssm=ssm,
             key=jax.random.PRNGKey(0),
         )
         preds = jax.vmap(sample)(samples)

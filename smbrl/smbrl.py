@@ -52,8 +52,6 @@ class smbrl:
         )
         self.model_learner = Learner(self.model, config.smbrl.model_optimizer)
         self.episodes = 0
-        self.hidden = None
-        self.ssm = self.model.ssm
 
     def __call__(
         self,
@@ -62,17 +60,9 @@ class smbrl:
         normalized_obs = _normalize(
             observation, self.obs_normalizer.result.mean, self.obs_normalizer.result.std
         )
-        if self.hidden is None:
-            hidden = [
-                np.tile(x, (observation.shape[0], 1, 1)) for x in self.model.init_state
-            ]
-        else:
-            hidden = self.hidden
         action, self.hidden = self.policy(
             normalized_obs,
-            hidden,  # type: ignore
             self.model,
-            self.ssm,
         )
         return np.asarray(action)
 
@@ -80,13 +70,11 @@ class smbrl:
     def policy(
         self,
         observation: jax.Array,
-        hidden: list[jax.Array],
         model: Model,
-        ssm: list[tuple[jax.Array, jax.Array, jax.Array]],
-    ) -> tuple[jax.Array, list[jax.Array]]:
-        def solve(observation, hidden):
+    ) -> jax.Array:
+        def solve(observation):
             horizon = self.config.smbrl.plan_horizon
-            objective = cem.make_objective(model, horizon, observation, hidden, ssm)
+            objective = cem.make_objective(model, horizon, observation)
             action = cem.solve(
                 objective,
                 jnp.zeros(
@@ -98,17 +86,9 @@ class smbrl:
                 jax.random.PRNGKey(self.config.training.seed),
                 **self.config.smbrl.cem,
             )[0]
-            new_hidden, _ = model(
-                observation[None],
-                action[None],
-                convolve=False,
-                hidden=hidden,
-                ssm=ssm,
-            )
-            assert new_hidden is not None
-            return action, new_hidden
+            return action
 
-        return jax.vmap(solve)(observation, hidden)
+        return jax.vmap(solve)(observation)
 
     def observe(self, trajectory: TrajectoryData):
         self.obs_normalizer.update_state(
@@ -129,11 +109,10 @@ class smbrl:
             )
         )
         self.train()
-        self.ssm = self.model.ssm
         self.episodes += 1
 
     def reset(self):
-        self.hidden = None
+        pass
 
     def train(self):
         for batch in self.replay_buffer.sample(self.config.smbrl.update_steps):
@@ -152,9 +131,7 @@ class smbrl:
             next_state_sequence,
             reward_sequence,
         ):
-            preds = jax.vmap(lambda s, a: model(s, a, convolve=True))(
-                state_sequence, action_sequence
-            )[1]
+            preds = jax.vmap(model)(state_sequence, action_sequence)[1]
             state_loss = (preds.next_state - next_state_sequence) ** 2
             reward_loss = (preds.reward.squeeze(-1) - reward_sequence) ** 2
             return 0.5 * (state_loss.mean() + reward_loss.mean())
