@@ -108,22 +108,19 @@ def test_model_learning():
         trajectories.reward,
         trajectories.cost,
     )
-    hidden, onestep_predictions = jax.vmap(agent.model)(
+    onestep_predictions = jax.vmap(agent.model)(
         trajectories.observation, trajectories.action
     )
-    assert hidden is not None
     context = 10
     horizon = trajectories.observation.shape[1] - context
-    sample = lambda obs, hidden, acs: agent.model.sample(
+    sample = lambda obs, acs: agent.model.sample(
         horizon,
         obs,
-        hidden,
         action_sequence=acs,
-        ssm=agent.model.ssm,
         key=jax.random.PRNGKey(0),
     )
     multistep_predictions = jax.vmap(sample)(
-        trajectories.observation[:, context], hidden, trajectories.action[:, context:]
+        trajectories.observation[:, context], trajectories.action[:, context:]
     )
     onestep_reward_mse = np.mean(
         (onestep_predictions.reward.squeeze(-1) - trajectories.reward) ** 2
