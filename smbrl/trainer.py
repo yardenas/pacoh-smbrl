@@ -17,7 +17,7 @@ class Trainer:
         config: DictConfig,
         make_env: Callable[[], Env],
         task_sampler: TaskSamplerFactory,
-        agent: Optional[smbrl.smbrl] = None,
+        agent: Optional[smbrl.SMBRL] = None,
         start_epoch: int = 0,
         seeds: Optional[List[int]] = None,
         namespace: Optional[str] = None,
@@ -53,7 +53,7 @@ class Trainer:
         else:
             self.env.reset(seed=self.config.training.seed, options={"task": tasks})
         if self.agent is None:
-            self.agent = smbrl.smbrl(
+            self.agent = smbrl.SMBRL(
                 self.env.observation_space,
                 self.env.action_space,
                 self.config,

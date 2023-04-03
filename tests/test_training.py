@@ -86,10 +86,10 @@ def test_model_learning():
 
     with Trainer(cfg, make_env, task_sampler) as trainer:
         assert trainer.agent is not None and trainer.env is not None
-        from smbrl.smbrl import smbrl, _normalize
+        from smbrl.smbrl import SMBRL, _normalize
 
         rs = np.random.RandomState(0)
-        smbrl.__call__ = lambda self, observation: np.tile(
+        SMBRL.__call__ = lambda self, observation: np.tile(
             rs.uniform(-1.0, 1.0, trainer.env.action_space.shape),  # type: ignore
             (
                 cfg.training.task_batch_size,

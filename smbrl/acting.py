@@ -7,7 +7,7 @@ from smbrl import utils
 from smbrl.episodic_async_env import EpisodicAsync
 from smbrl.iteration_summary import IterationSummary
 from smbrl.logging import TrainingLogger
-from smbrl.smbrl import smbrl
+from smbrl.smbrl import SMBRL
 from smbrl.trajectory import Trajectory, TrajectoryData, Transition
 
 
@@ -22,7 +22,7 @@ def log_results(trajectory: TrajectoryData, logger: TrainingLogger, step: int):
 
 
 def interact(
-    agent: smbrl,
+    agent: SMBRL,
     environment: EpisodicAsync,
     num_episodes: int,
     train: bool,
@@ -64,7 +64,7 @@ def interact(
 
 
 def epoch(
-    agent: smbrl,
+    agent: SMBRL,
     env: EpisodicAsync,
     tasks: Iterable[Any],
     episodes_per_task: int,

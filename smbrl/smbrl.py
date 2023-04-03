@@ -20,7 +20,7 @@ from smbrl.utils import Learner
 FloatArray = npt.NDArray[Union[np.float32, np.float64]]
 
 
-class smbrl:
+class SMBRL:
     def __init__(
         self,
         observation_space: spaces.Box,
