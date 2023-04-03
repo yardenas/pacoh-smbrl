@@ -5,7 +5,6 @@ import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 
-import sadam.s4 as s4
 
 
 class Prediction(NamedTuple):

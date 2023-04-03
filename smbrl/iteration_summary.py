@@ -4,7 +4,7 @@ from typing import List, Tuple
 import numpy as np
 from numpy import typing as npt
 
-from sadam.trajectory import Trajectory
+from smbrl.trajectory import Trajectory
 
 
 @dataclass

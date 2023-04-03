@@ -3,7 +3,7 @@ from typing import Iterator, Optional
 import numpy as np
 from tensorflow import data as tfd
 
-from sadam.trajectory import TrajectoryData
+from smbrl.trajectory import TrajectoryData
 
 
 class ReplayBuffer:

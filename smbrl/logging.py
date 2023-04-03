@@ -11,7 +11,7 @@ from numpy import typing as npt
 from tabulate import tabulate
 from tensorboardX import SummaryWriter
 
-from sadam import metrics as m
+from smbrl import metrics as m
 
 
 class TrainingLogger:

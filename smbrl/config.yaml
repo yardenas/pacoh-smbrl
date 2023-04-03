@@ -17,7 +17,7 @@ training:
   task_batch_size: 20
   scale_reward: 1.
 
-sadam:
+smbrl:
   replay_buffer:
     batch_size: 128
     sequence_length: 64

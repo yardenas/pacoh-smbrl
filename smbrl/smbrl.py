@@ -9,18 +9,18 @@ from numpy import typing as npt
 from omegaconf import DictConfig
 from optax import OptState
 
-from sadam import cem
-from sadam import metrics as m
-from sadam.logging import TrainingLogger
-from sadam.models import Model
-from sadam.replay_buffer import ReplayBuffer
-from sadam.trajectory import TrajectoryData
-from sadam.utils import Learner
+from smbrl import cem
+from smbrl import metrics as m
+from smbrl.logging import TrainingLogger
+from smbrl.models import Model
+from smbrl.replay_buffer import ReplayBuffer
+from smbrl.trajectory import TrajectoryData
+from smbrl.utils import Learner
 
 FloatArray = npt.NDArray[Union[np.float32, np.float64]]
 
 
-class SAdaM:
+class smbrl:
     def __init__(
         self,
         observation_space: spaces.Box,
@@ -38,19 +38,19 @@ class SAdaM:
             max_length=config.training.time_limit // config.training.action_repeat,
             seed=config.training.seed,
             precision=config.training.precision,
-            sequence_length=config.sadam.replay_buffer.sequence_length
+            sequence_length=config.smbrl.replay_buffer.sequence_length
             // config.training.action_repeat,
-            batch_size=config.sadam.replay_buffer.batch_size,
-            capacity=config.sadam.replay_buffer.capacity,
+            batch_size=config.smbrl.replay_buffer.batch_size,
+            capacity=config.smbrl.replay_buffer.capacity,
         )
         self.model = Model(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
-            sequence_length=config.sadam.replay_buffer.sequence_length,
+            sequence_length=config.smbrl.replay_buffer.sequence_length,
             key=self.prng,
-            **config.sadam.model,
+            **config.smbrl.model,
         )
-        self.model_learner = Learner(self.model, config.sadam.model_optimizer)
+        self.model_learner = Learner(self.model, config.smbrl.model_optimizer)
         self.episodes = 0
         self.hidden = None
         self.ssm = self.model.ssm
@@ -85,7 +85,7 @@ class SAdaM:
         ssm: list[tuple[jax.Array, jax.Array, jax.Array]],
     ) -> tuple[jax.Array, list[jax.Array]]:
         def solve(observation, hidden):
-            horizon = self.config.sadam.plan_horizon
+            horizon = self.config.smbrl.plan_horizon
             objective = cem.make_objective(model, horizon, observation, hidden, ssm)
             action = cem.solve(
                 objective,
@@ -96,7 +96,7 @@ class SAdaM:
                     )
                 ),
                 jax.random.PRNGKey(self.config.training.seed),
-                **self.config.sadam.cem,
+                **self.config.smbrl.cem,
             )[0]
             new_hidden, _ = model(
                 observation[None],
@@ -136,7 +136,7 @@ class SAdaM:
         self.hidden = None
 
     def train(self):
-        for batch in self.replay_buffer.sample(self.config.sadam.update_steps):
+        for batch in self.replay_buffer.sample(self.config.smbrl.update_steps):
             loss, self.model, self.model_learner.state = self.update_model(
                 self.model, self.model_learner.state, batch
             )

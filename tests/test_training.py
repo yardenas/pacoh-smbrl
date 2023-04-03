@@ -2,13 +2,13 @@ from typing import Iterable, Optional
 
 from hydra import compose, initialize
 
-from sadam import acting
-from sadam.trainer import Trainer
-from sadam.trajectory import TrajectoryData
+from smbrl import acting
+from smbrl.trainer import Trainer
+from smbrl.trajectory import TrajectoryData
 
 
 def test_training():
-    with initialize(version_base=None, config_path="../sadam/"):
+    with initialize(version_base=None, config_path="../smbrl/"):
         cfg = compose(
             config_name="config",
             overrides=[
@@ -18,11 +18,11 @@ def test_training():
                 "training.parallel_envs=5",
                 "training.eval_every=1",
                 "training.action_repeat=4",
-                "sadam.model.n_layers=1",
-                "sadam.model.hidden_size=32",
-                "sadam.model.hippo_n=8",
-                "sadam.update_steps=1",
-                "sadam.replay_buffer.sequence_length=16",
+                "smbrl.model.n_layers=1",
+                "smbrl.model.hidden_size=32",
+                "smbrl.model.hippo_n=8",
+                "smbrl.update_steps=1",
+                "smbrl.replay_buffer.sequence_length=16",
             ],
         )
     if not cfg.training.jit:
@@ -50,7 +50,7 @@ def test_model_learning():
     import jax
     import numpy as np
 
-    with initialize(version_base=None, config_path="../sadam/"):
+    with initialize(version_base=None, config_path="../smbrl/"):
         cfg = compose(
             config_name="config",
             overrides=[
@@ -60,11 +60,11 @@ def test_model_learning():
                 "training.parallel_envs=5",
                 "training.render_episodes=0",
                 "training.scale_reward=0.1",
-                "sadam.model.n_layers=2",
-                "sadam.model.hidden_size=64",
-                "sadam.model.hippo_n=16",
-                "sadam.update_steps=100",
-                "sadam.replay_buffer.sequence_length=30",
+                "smbrl.model.n_layers=2",
+                "smbrl.model.hidden_size=64",
+                "smbrl.model.hippo_n=16",
+                "smbrl.update_steps=100",
+                "smbrl.replay_buffer.sequence_length=30",
             ],
         )
     if not cfg.training.jit:
@@ -86,10 +86,10 @@ def test_model_learning():
 
     with Trainer(cfg, make_env, task_sampler) as trainer:
         assert trainer.agent is not None and trainer.env is not None
-        from sadam.sadam import SAdaM, _normalize
+        from smbrl.smbrl import smbrl, _normalize
 
         rs = np.random.RandomState(0)
-        SAdaM.__call__ = lambda self, observation: np.tile(
+        smbrl.__call__ = lambda self, observation: np.tile(
             rs.uniform(-1.0, 1.0, trainer.env.action_space.shape),  # type: ignore
             (
                 cfg.training.task_batch_size,

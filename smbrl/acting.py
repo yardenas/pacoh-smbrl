@@ -3,12 +3,12 @@ from typing import Any, Iterable
 import numpy as np
 from tqdm import tqdm
 
-from sadam import utils
-from sadam.episodic_async_env import EpisodicAsync
-from sadam.iteration_summary import IterationSummary
-from sadam.logging import TrainingLogger
-from sadam.sadam import SAdaM
-from sadam.trajectory import Trajectory, TrajectoryData, Transition
+from smbrl import utils
+from smbrl.episodic_async_env import EpisodicAsync
+from smbrl.iteration_summary import IterationSummary
+from smbrl.logging import TrainingLogger
+from smbrl.smbrl import smbrl
+from smbrl.trajectory import Trajectory, TrajectoryData, Transition
 
 
 def log_results(trajectory: TrajectoryData, logger: TrainingLogger, step: int):
@@ -22,7 +22,7 @@ def log_results(trajectory: TrajectoryData, logger: TrainingLogger, step: int):
 
 
 def interact(
-    agent: SAdaM,
+    agent: smbrl,
     environment: EpisodicAsync,
     num_episodes: int,
     train: bool,
@@ -64,7 +64,7 @@ def interact(
 
 
 def epoch(
-    agent: SAdaM,
+    agent: smbrl,
     env: EpisodicAsync,
     tasks: Iterable[Any],
     episodes_per_task: int,

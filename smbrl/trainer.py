@@ -6,7 +6,7 @@ import numpy as np
 from gymnasium import Env
 from omegaconf import DictConfig
 
-from sadam import acting, episodic_async_env, logging, sadam, utils
+from smbrl import acting, episodic_async_env, logging, smbrl, utils
 
 TaskSamplerFactory = Callable[[int, Optional[bool]], Iterable[Any]]
 
@@ -17,7 +17,7 @@ class Trainer:
         config: DictConfig,
         make_env: Callable[[], Env],
         task_sampler: TaskSamplerFactory,
-        agent: Optional[sadam.SAdaM] = None,
+        agent: Optional[smbrl.smbrl] = None,
         start_epoch: int = 0,
         seeds: Optional[List[int]] = None,
         namespace: Optional[str] = None,
@@ -53,7 +53,7 @@ class Trainer:
         else:
             self.env.reset(seed=self.config.training.seed, options={"task": tasks})
         if self.agent is None:
-            self.agent = sadam.SAdaM(
+            self.agent = smbrl.smbrl(
                 self.env.observation_space,
                 self.env.action_space,
                 self.config,

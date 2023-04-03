@@ -15,7 +15,7 @@ from gymnasium.wrappers.clip_action import ClipAction
 from gymnasium.wrappers.rescale_action import RescaleAction
 from gymnasium.wrappers.time_limit import TimeLimit
 
-from sadam import wrappers
+from smbrl import wrappers
 
 
 class Protocol(Enum):

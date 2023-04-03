@@ -3,7 +3,7 @@ from typing import Callable
 import jax
 import jax.numpy as jnp
 
-from sadam import models as m
+from smbrl import models as m
 
 SSM = tuple[jax.Array, jax.Array, jax.Array]
 ObjectiveFn = Callable[[jax.Array], jax.Array]
