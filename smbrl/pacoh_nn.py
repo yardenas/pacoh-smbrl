@@ -5,9 +5,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from jax.flatten_util import ravel_pytree  # type: ignore
+import distrax
 
-import models
+from smbrl.models import ParamsDistribution
 
 
 def meta_train(
@@ -29,7 +29,7 @@ def meta_train(
             prediction_fn,
             hyper_prior,
             hyper_posterior,
-            next(keys),
+            jax.random.PRNGKey(0),
             n_prior_samples,
             optimizer,
             opt_state,
@@ -80,11 +80,11 @@ def train_step(
     stein_grads = reconstruct_tree(stein_grads.ravel())
     updates, new_opt_state = optimizer.update(stein_grads, opt_state)
     new_params = optax.apply_updates(hyper_posterior, updates)
-    return (models.ParamsMeanField(*new_params), new_opt_state, log_probs.mean())
+    return (ParamsDistribution(*new_params), new_opt_state, log_probs.mean())
 
 
 def _to_matrix(params, num_particles):
-    flattened_params, reconstruct_tree = ravel_pytree(params)
+    flattened_params, reconstruct_tree = jax.tree_util.ravel_pytree(params)
     matrix = flattened_params.reshape((num_particles, -1))
     return matrix, reconstruct_tree
 
@@ -177,62 +177,3 @@ def predict(
     prediction_fn = jax.vmap(prediction_fn, in_axes=(0, None))
     y_hat, stddev = prediction_fn(posterior, x)
     return y_hat, stddev
-
-
-# if __name__ == "__main__":
-#     import functools
-
-#     import haiku as hk
-#     import jax
-#     import jax.numpy as jnp
-#     import numpy as np
-#     import optax
-
-#     import models
-#     import pacoh_nn as pacoh
-#     import sinusoid_regression_dataset
-
-#     dataset = sinusoid_regression_dataset.SinusoidRegression(16, 5, 5)
-
-#     def net(x: jnp.ndarray) -> jnp.ndarray:
-#         x = hk.nets.MLP((32, 32, 32, 32, 1))(x)
-#         mu = x
-#         stddev = hk.get_parameter(
-#             "stddev", [], init=lambda shape, dtype: jnp.ones(shape, dtype) * 1e-3
-#         )
-#         return mu, stddev * jnp.ones_like(mu)
-
-#     init, apply = hk.without_apply_rng(hk.transform(net))
-#     example = next(dataset.train_set)[0][0]
-#     seed_sequence = hk.PRNGSequence(666)
-#     mean_prior_over_mus = jax.tree_map(
-#         jnp.zeros_like, init(next(seed_sequence), example)
-#     )
-#     mean_prior_over_stddevs = jax.tree_map(jnp.zeros_like, mean_prior_over_mus)
-#     hyper_prior = models.ParamsMeanField(
-#         models.ParamsMeanField(mean_prior_over_mus, mean_prior_over_stddevs),
-#         1.0,
-#     )
-#     n_particles = 10
-#     init = jax.vmap(init, (0, None))
-#     particles_mus = init(jnp.asarray(seed_sequence.take(n_particles)), example)
-#     particle_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * 1e-4, particles_mus)
-#     hyper_posterior = models.ParamsMeanField(particles_mus, particle_stddevs)
-#     opt = optax.flatten(optax.adam(3e-4))
-#     opt_state = opt.init(hyper_posterior)
-#     hyper_posterior = pacoh.meta_train(
-#         dataset.train_set, apply, hyper_prior, hyper_posterior, opt, opt_state, 1000, 10
-#     )
-#     easy_dataset = sinusoid_regression_dataset.SinusoidRegression(16, 5, 100)
-#     infer_posteriors = jax.vmap(
-#         pacoh.infer_posterior, in_axes=(0, 0, None, None, None, None, None)
-#     )
-
-#     (context_x, context_y), (test_x, test_y) = next(easy_dataset.test_set)
-#     posteriors, losses = infer_posteriors(
-#         context_x, context_y, hyper_posterior, apply, next(seed_sequence), 1000, 3e-4
-#     )
-#     predict = jax.vmap(predict, (0, 0, None))
-#     predictions = predict(posteriors, test_x, apply)
-#     posteriors = hyper_posterior.sample(next(seed_sequence), 1)
-#     predict(posteriors, test_x, apply)
