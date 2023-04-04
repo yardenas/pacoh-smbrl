@@ -93,14 +93,13 @@ def test_training():
     hyper_posterior = pacoh.meta_train(
         dataset.train_set, hyper_prior, hyper_posterior, opt, opt_state, 1000, 10
     )
-    infer_posteriors = jax.vmap(
-        pacoh.infer_posterior, in_axes=(0, 0, None, None, None, None)
-    )
     key, next_key = jax.random.split(key)
     (context_x, context_y), (test_x, test_y) = next(dataset.test_set)
-    posteriors, losses = infer_posteriors(
-        context_x, context_y, hyper_posterior, next_key, 1000, 3e-4
+    infer_posteriors = lambda x, y: pacoh.infer_posterior(
+        x, y, hyper_posterior, next_key, 1000, 3e-4
     )
+    infer_posteriors = jax.vmap(infer_posteriors)
+    posteriors, losses = infer_posteriors(context_x, context_y)
     # predict = jax.vmap(predict, (0, 0, None))
     # predictions = predict(posteriors, test_x, apply)
     # posteriors = hyper_posterior.sample(next(seed_sequence), 1)

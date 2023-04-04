@@ -81,7 +81,7 @@ def train_step(
 
 
 def _to_matrix(params, num_particles):
-    flattened_params, reconstruct_tree = jax.tree_util.ravel_pytree(params)
+    flattened_params, reconstruct_tree = jax.flatten_util.ravel_pytree(params)
     matrix = flattened_params.reshape((num_particles, -1))
     return matrix, reconstruct_tree
 
@@ -132,7 +132,7 @@ def rbf_kernel(x, y, bandwidth=None):
     return k_xy
 
 
-@functools.partial(jax.jit, static_argnums=(3, 5))
+@functools.partial(jax.jit, static_argnums=(4, 5))
 def infer_posterior(
     x,
     y,
@@ -149,7 +149,7 @@ def infer_posterior(
     opt_state = optimizer.init(prior)
 
     def loss(model):
-        y_hat, stddevs = model(x)
+        y_hat, stddevs = jax.vmap(model)(x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
         return -log_likelihood.mean()
 
