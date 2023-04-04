@@ -100,7 +100,6 @@ def test_training():
     )
     infer_posteriors = jax.vmap(infer_posteriors)
     posteriors, losses = infer_posteriors(context_x, context_y)
-    # predict = jax.vmap(predict, (0, 0, None))
-    # predictions = predict(posteriors, test_x, apply)
-    # posteriors = hyper_posterior.sample(next(seed_sequence), 1)
-    # predict(posteriors, test_x, apply)
+    predict = jax.vmap(pacoh.predict)
+    predictions = predict(posteriors, test_x)
+    assert predictions[0].shape == test_y.shape

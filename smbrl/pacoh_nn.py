@@ -96,13 +96,7 @@ def particle_loss(
 ):
     def estimate_mll(x, y):
         prior_samples = particle.sample(key, n_prior_samples)
-        # First vmap along the batch dimension.
-        evaluate_ensemble = lambda model, x: jax.vmap(model)(x)
-        # then vmap over members of the ensemble.
-        per_sample_pred = eqx.filter_vmap(
-            evaluate_ensemble, in_axes=(eqx.if_array(0), None)
-        )
-        y_hat, stddevs = per_sample_pred(prior_samples, x)
+        y_hat, stddevs = predict(prior_samples, x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
         batch_size = x.shape[0]
         mll = jax.scipy.special.logsumexp(
@@ -164,10 +158,14 @@ def infer_posterior(
     return prior, losses
 
 
-@functools.partial(jax.jit, static_argnums=(2))
 def predict(posterior, x):
-    prediction_fn = jax.vmap(posterior, in_axes=(0, None))
-    y_hat, stddev = prediction_fn(x)
+    # First vmap along the batch dimension.
+    ensemble_predict = lambda model, x: jax.vmap(model)(x)
+    # then vmap over members of the ensemble.
+    ensemble_predict = eqx.filter_vmap(
+        ensemble_predict, in_axes=(eqx.if_array(0), None)
+    )
+    y_hat, stddev = ensemble_predict(posterior, x)
     return y_hat, stddev
 
 
