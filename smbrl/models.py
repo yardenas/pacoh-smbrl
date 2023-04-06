@@ -110,7 +110,6 @@ class ParamsDistribution(NamedTuple):
     ) -> tuple[distrax.Distribution, jax.Array, Callable[[jax.Array], PyTree]]:
         self_flat_mus, pytree_def = jax.flatten_util.ravel_pytree(self.mus)
         self_flat_stddevs, _ = jax.flatten_util.ravel_pytree(self.stddev)
-        dist = distrax.MultivariateNormalDiag(
-            self_flat_mus, jnp.ones_like(self_flat_mus) * self_flat_stddevs
-        )
+        self_flat_stddevs = jax.nn.softplus(self_flat_stddevs)
+        dist = distrax.MultivariateNormalDiag(self_flat_mus, self_flat_stddevs)
         return dist, self_flat_mus, pytree_def

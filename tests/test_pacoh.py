@@ -42,17 +42,17 @@ class SinusoidRegression:
         amplitudes = []
         phases = []
         for _ in range(self.meta_batch_size):
-            amplitudes.append(self.rs.uniform(low=0.1, high=0.75))
-            phases.append(self.rs.uniform(low=-np.pi, high=np.pi))
+            amplitudes.append(self.rs.uniform(low=0.75, high=1.0))
+            phases.append(self.rs.uniform(low=-2.0, high=2.0))
 
         def get_batch(num_shots):
             xs, ys = [], []
             for amplitude, phase in zip(amplitudes, phases):
                 if num_shots > 0:
-                    x = self.rs.uniform(low=-5.0, high=5.0, size=(num_shots, 1))
+                    x = self.rs.uniform(low=-4.0, high=4.0, size=(num_shots, 1))
                 else:
-                    x = np.linspace(-5.0, 5.0, 1000)[:, None]
-                y = amplitude * np.sin(x + phase)
+                    x = np.linspace(-4.0, 4.0, 1000)[:, None]
+                y = amplitude * np.sin(3.0 * x + phase)
                 xs.append(x)
                 ys.append(y)
             return np.stack(xs), np.stack(ys)
@@ -79,27 +79,108 @@ class Heterescedastic(eqx.Module):
     def __call__(self, x: jax.Array) -> jax.Array:
         for layer in self.layers:
             x = jnn.relu(layer(x))
-        return self.mu(x), self.stddev
+        return self.mu(x), _clip_stddev(self.stddev, 0.1, 0.1, 0.1)
+
+
+def _clip_stddev(stddev, stddev_min, stddev_max, stddev_scale):
+    _inv_softplus = lambda x: jnp.where(x < 20.0, jnp.log(jnp.exp(x) - 1.0), x)
+    stddev = jnp.clip(
+        (stddev + _inv_softplus(0.1)) * stddev_scale,
+        _inv_softplus(stddev_min),
+        _inv_softplus(stddev_max),
+    )
+    return jnn.softplus(stddev)
 
 
 def test_training():
     dataset = SinusoidRegression(16, 5, 5)
-    make_model = lambda key: Heterescedastic(1, 16, 1, key)
+    make_model = lambda key: Heterescedastic(1, 32, 1, key)
     key = jax.random.PRNGKey(0)
     hyper_prior = pacoh.make_hyper_prior(make_model(key))
     hyper_posterior = pacoh.make_hyper_posterior(make_model, key, 10)
-    opt = optax.flatten(optax.adam(3e-4))
+    opt = optax.flatten(optax.adam(5e-4))
     opt_state = opt.init(hyper_posterior)
-    hyper_posterior = pacoh.meta_train(
-        dataset.train_set, hyper_prior, hyper_posterior, opt, opt_state, 1000, 10
-    )
-    key, next_key = jax.random.split(key)
+    for epoch in range(4):
+        hyper_posterior, opt_state = pacoh.meta_train(
+            dataset.train_set, hyper_prior, hyper_posterior, opt, opt_state, 5000, 10
+        )
+        key, key_next = jax.random.split(key)
+        priors = hyper_posterior.sample(key_next, 10)
+        priors = jax.tree_map(lambda x: x.mean(0), priors)
+        plot_prior(*next(dataset.train_set), priors)
     (context_x, context_y), (test_x, test_y) = next(dataset.test_set)
-    infer_posteriors = lambda x, y: pacoh.infer_posterior(
-        x, y, hyper_posterior, next_key, 1000, 3e-4
-    )
-    infer_posteriors = jax.vmap(infer_posteriors)
+    priors = hyper_posterior.sample(key_next, 10)
+    priors = jax.tree_map(lambda x: x.mean(0), priors)
+    infer_posteriors = lambda x, y: pacoh.infer_posterior(x, y, priors, 5000, 3e-4)
+    infer_posteriors = jax.jit(jax.vmap(infer_posteriors))
     posteriors, losses = infer_posteriors(context_x, context_y)
     predict = jax.vmap(pacoh.predict)
     predictions = predict(posteriors, test_x)
-    assert predictions[0].shape == test_y.shape
+    plot(context_x, context_y, test_x, test_y, predictions)
+
+
+def plot_prior(x, y, priors):
+    import matplotlib.pyplot as plt
+
+    x_pred = np.linspace(-4.0, 4.0, 1000)[:, None]
+    predictions = pacoh.predict(priors, x_pred)
+    x = x.reshape(-1, 1)
+    y = y.reshape(-1, 1)
+    mu, stddev = predictions
+    _, (ax) = plt.subplots(1, 1, figsize=(4, 4))
+    ax.scatter(x, y, label="observed", s=5, alpha=0.4)
+    ax.plot(
+        np.tile(x_pred, (mu.shape[0], 1, 1)).squeeze(-1).T,
+        mu.squeeze(-1).T,
+        label="ensemble means",
+        color="green",
+        alpha=0.3,
+        linewidth=1.0,
+    )
+    plt.show()
+
+
+def plot(x, y, x_tst, y_tst, yhats):
+    import matplotlib.pyplot as plt
+
+    mus, stddevs = yhats
+    plt.figure()
+    for task in range(6):
+        plt.subplot(2, 3, task + 1)
+        avgm = np.zeros_like(x_tst[task, :, 0])
+        for i, (mu, stddev) in enumerate(zip(mus[task], stddevs[task])):
+            m = np.squeeze(mu)
+            s = np.squeeze(stddev)
+            if i < 15:
+                plt.plot(
+                    x_tst[task],
+                    m,
+                    "r",
+                    label="ensemble means" if i == 0 else None,
+                    linewidth=1.0,
+                )
+                plt.plot(
+                    x_tst[task],
+                    m + 3 * s,
+                    "g",
+                    linewidth=0.5,
+                    label="ensemble means + 3 ensemble stdev" if i == 0 else None,
+                )
+                plt.plot(
+                    x_tst[task],
+                    m - 3 * s,
+                    "g",
+                    linewidth=0.5,
+                    label="ensemble means - 3 ensemble stdev" if i == 0 else None,
+                )
+            avgm += m
+        plt.plot(x_tst[task], avgm / (i + 1), "r", label="overall mean", linewidth=4)
+        plt.plot(x_tst[task], y_tst[task], "b", label="overall mean", linewidth=1)
+        plt.scatter(x[task], y[task], c="b", label="observed")
+        ax = plt.gca()
+        ax.xaxis.set_ticks_position("bottom")
+        ax.yaxis.set_ticks_position("left")
+        ax.spines["left"].set_position(("data", 0))
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+    plt.show()

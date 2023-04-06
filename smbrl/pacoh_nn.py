@@ -35,7 +35,7 @@ def meta_train(
         )
         if i % 100 == 0:
             print(f"Iteration {i} log probs: {log_probs}")
-    return hyper_posterior
+    return hyper_posterior, opt_state
 
 
 @functools.partial(jax.jit, static_argnums=(5, 6))
@@ -50,7 +50,7 @@ def train_step(
     opt_state,
 ):
     grad_fn = jax.value_and_grad(
-        lambda hyper_posterior: particle_loss(
+        lambda hyper_posterior: particle_likelihood(
             meta_batch_x,
             meta_batch_y,
             hyper_posterior,
@@ -66,14 +66,15 @@ def train_step(
     num_particles = jax.tree_util.tree_flatten(log_prob_grads)[0][0].shape[0]
     particles_matrix, reconstruct_tree = _to_matrix(hyper_posterior, num_particles)
     kxx, kernel_vjp = jax.vjp(
-        lambda x: rbf_kernel(x, particles_matrix), particles_matrix
+        lambda x: rbf_kernel(x, particles_matrix, 10.0), particles_matrix
     )
     # Summing along the 'particles axis' to compute the per-particle gradients, see
     # https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
-    kernel_grads = kernel_vjp(jnp.ones(kxx.shape))[0]
+    kernel_grads = kernel_vjp(-jnp.ones(kxx.shape))[0]
     stein_grads = (
-        jnp.matmul(kxx, _to_matrix(log_prob_grads, num_particles)[0]) + kernel_grads
-    ) / num_particles
+        -(jnp.matmul(kxx, _to_matrix(log_prob_grads, num_particles)[0]) + kernel_grads)
+        / num_particles
+    )
     stein_grads = reconstruct_tree(stein_grads.ravel())
     updates, new_opt_state = optimizer.update(stein_grads, opt_state)
     new_params = optax.apply_updates(hyper_posterior, updates)
@@ -86,16 +87,16 @@ def _to_matrix(params, num_particles):
     return matrix, reconstruct_tree
 
 
-def particle_loss(
+def particle_likelihood(
     meta_batch_x,
     meta_batch_y,
-    particle,
+    prior,
     hyper_prior,
     key,
     n_prior_samples,
 ):
     def estimate_mll(x, y):
-        prior_samples = particle.sample(key, n_prior_samples)
+        prior_samples = prior.sample(key, n_prior_samples)
         y_hat, stddevs = predict(prior_samples, x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
         batch_size = x.shape[0]
@@ -108,8 +109,8 @@ def particle_loss(
     # @ Algorithm 1 PACOH with SVGD approximation of Q∗ (MLL_Estimator)
     # @ https://arxiv.org/pdf/2002.05551.pdf.
     mll = jax.vmap(estimate_mll)(meta_batch_x, meta_batch_y)
-    log_prob_prior = hyper_prior.log_prob(particle)
-    return -(mll + log_prob_prior).mean()
+    log_prob_prior = hyper_prior.log_prob(prior) * 1e-4
+    return (mll + log_prob_prior).mean()
 
 
 # Based on tf-probability implementation of batched pairwise matrices:
@@ -118,63 +119,64 @@ def rbf_kernel(x, y, bandwidth=None):
     row_norm_x = (x**2).sum(-1)[..., None]
     row_norm_y = (y**2).sum(-1)[..., None, :]
     pairwise = jnp.clip(row_norm_x + row_norm_y - 2.0 * jnp.matmul(x, y.T), 0.0)
-    n_x = pairwise.shape[-2]
     bandwidth = bandwidth if bandwidth is not None else jnp.median(pairwise)
+    n_x = pairwise.shape[-2]
     bandwidth = 0.5 * bandwidth / jnp.log(n_x + 1)
     bandwidth = jnp.maximum(jax.lax.stop_gradient(bandwidth), 1e-5)
-    k_xy = jnp.exp(-pairwise / bandwidth / 2)
+    k_xy = jnp.exp(-pairwise / bandwidth)
     return k_xy
 
 
-@functools.partial(jax.jit, static_argnums=(4, 5))
 def infer_posterior(
     x,
     y,
-    hyper_posterior,
-    key,
+    prior,
     update_steps,
     learning_rate,
 ):
     # Sample prior parameters from the hyper-posterior to form an ensemble
     # of neural networks.
-    prior = hyper_posterior.sample(key, 1)
-    prior = jax.tree_util.tree_map(lambda x: x.reshape((-1,) + x.shape[2:]), prior)
     optimizer = optax.flatten(optax.adam(learning_rate))
     opt_state = optimizer.init(prior)
 
     def loss(model):
-        y_hat, stddevs = jax.vmap(model)(x)
+        y_hat, stddevs = predict(model, x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
         return -log_likelihood.mean()
 
     def update(carry, _):
         model, opt_state = carry
-        values, grads = jax.vmap(jax.value_and_grad(loss))(model)
+        values, grads = jax.value_and_grad(loss)(model)
         updates, opt_state = optimizer.update(grads, opt_state)
         model = optax.apply_updates(model, updates)
         return (model, opt_state), values.mean()
 
-    (prior, _), losses = jax.lax.scan(update, (prior, opt_state), None, update_steps)
-    return prior, losses
+    (posterior, _), losses = jax.lax.scan(
+        update, (prior, opt_state), None, update_steps
+    )
+    return posterior, losses
 
 
-def predict(posterior, x):
+def predict(model, x):
     # First vmap along the batch dimension.
     ensemble_predict = lambda model, x: jax.vmap(model)(x)
     # then vmap over members of the ensemble.
     ensemble_predict = eqx.filter_vmap(
         ensemble_predict, in_axes=(eqx.if_array(0), None)
     )
-    y_hat, stddev = ensemble_predict(posterior, x)
+    y_hat, stddev = ensemble_predict(model, x)
     return y_hat, stddev
 
 
 def make_hyper_prior(model):
     mean_prior_over_mus = jax.tree_map(jnp.zeros_like, model)
-    mean_prior_over_stddevs = jax.tree_map(jnp.zeros_like, mean_prior_over_mus)
+    stddev_prior_over_mus = jax.tree_map(lambda x: jnp.ones_like(x) * 1.0, model)
+    mean_prior_over_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * 10.0, model)
+    stddev_prior_over_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * 10.0, model)
+    # Create a distribution over a Mean Field distribution of NNs.
     hyper_prior = ParamsDistribution(
-        ParamsDistribution(mean_prior_over_mus, mean_prior_over_stddevs),
-        1.0,
+        ParamsDistribution(mean_prior_over_mus, stddev_prior_over_mus),
+        ParamsDistribution(mean_prior_over_stddevs, stddev_prior_over_stddevs),
     )
     return hyper_prior
 
@@ -182,6 +184,8 @@ def make_hyper_prior(model):
 def make_hyper_posterior(make_model, key, n_particles):
     init_ensemble = jax.vmap(make_model)
     particles_mus = init_ensemble(jnp.asarray(jax.random.split(key, n_particles)))
-    particle_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * 1e-4, particles_mus)
+    particles_mus = jax.tree_map(lambda x: jnp.zeros_like(x), particles_mus)
+    particle_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * -15.0, particles_mus)
+    # Create a distribution over ensembles of NNs.
     hyper_posterior = ParamsDistribution(particles_mus, particle_stddevs)
     return hyper_posterior
