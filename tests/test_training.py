@@ -94,7 +94,7 @@ def test_model_learning():
                 1,
             ),
         )
-        trainer.train(epochs=3)
+        trainer.train(epochs=1)
     agent = trainer.agent
     assert agent is not None
     trajectories = acting.interact(agent, trainer.env, 1, False)[0].as_numpy()

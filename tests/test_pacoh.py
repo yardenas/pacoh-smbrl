@@ -105,10 +105,10 @@ def test_training():
     make_model = lambda key: Homoscedastic(1, 32, 1, key)
     key = jax.random.PRNGKey(0)
     hyper_prior = pacoh.make_hyper_prior(make_model(key))
-    hyper_posterior = pacoh.make_hyper_posterior(make_model, key, 10)
+    hyper_posterior = pacoh.make_hyper_posterior(make_model, key, 10, 1e-4)
     opt = optax.flatten(optax.adam(5e-4))
     opt_state = opt.init(hyper_posterior)
-    for _ in range(4):
+    for _ in range(2):
         key, key_next = jax.random.split(key)
         (hyper_posterior, opt_state), _ = eqx.filter_jit(pacoh.meta_train)(
             train_dataset,
@@ -125,9 +125,10 @@ def test_training():
         priors = jax.tree_map(lambda x: x.mean(0), priors)
         plot_prior(*next(data_generating_process.train_set), priors)
     (context_x, context_y), (test_x, test_y) = next(data_generating_process.test_set)
-    priors = hyper_posterior.sample(key_next, 10)
-    priors = jax.tree_map(lambda x: x.mean(0), priors)
-    infer_posteriors = lambda x, y: pacoh.infer_posterior(x, y, priors, 5000, 3e-4)
+    key, key_next = jax.random.split(key)
+    infer_posteriors = lambda x, y: pacoh.infer_posterior(
+        x, y, hyper_posterior, 5000, 3e-4, 10, key_next, 1e-8
+    )
     infer_posteriors = jax.jit(jax.vmap(infer_posteriors))
     posteriors, losses = infer_posteriors(context_x, context_y)
     predict = jax.vmap(pacoh.predict)

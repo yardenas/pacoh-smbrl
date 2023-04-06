@@ -1,5 +1,3 @@
-import functools
-
 import distrax
 import equinox as eqx
 import jax
@@ -29,17 +27,22 @@ def meta_train(
         key, next_key = jax.random.split(key)
         ids = jax.random.choice(next_key, num_examples - 1)
         meta_batch_x, meta_batch_y = jax.tree_map(lambda x: x[ids], data)
-        hyper_posterior, opt_state, log_probs = train_step(
-            meta_batch_x,
-            meta_batch_y,
-            hyper_prior,
-            hyper_posterior,
-            key,
-            n_prior_samples,
-            optimizer,
-            opt_state,
-            prior_weight,
-            bandwidth,
+        # vmap to compute the grads for each svgd particle.
+        mll_fn = jax.vmap(
+            jax.value_and_grad(
+                lambda hyper_posterior_particle: meta_mll(
+                    meta_batch_x,
+                    meta_batch_y,
+                    hyper_posterior_particle,
+                    hyper_prior,
+                    key,
+                    n_prior_samples,
+                    prior_weight,
+                )
+            )
+        )
+        hyper_posterior, opt_state, log_probs = svgd(
+            hyper_posterior, mll_fn, bandwidth, optimizer, opt_state
         )
         return (hyper_posterior, opt_state), log_probs
 
@@ -51,50 +54,23 @@ def meta_train(
     )
 
 
-@functools.partial(jax.jit, static_argnums=(5, 6))
-def train_step(
-    meta_batch_x,
-    meta_batch_y,
-    hyper_prior,
-    hyper_posterior,
-    key,
-    n_prior_samples,
-    optimizer,
-    opt_state,
-    prior_weight,
-    bandwidth,
-):
-    grad_fn = jax.value_and_grad(
-        lambda hyper_posterior: particle_likelihood(
-            meta_batch_x,
-            meta_batch_y,
-            hyper_posterior,
-            hyper_prior,
-            key,
-            n_prior_samples,
-            prior_weight,
-        )
-    )
-    # vmap to compute the grads for each particle in the ensemble with respect
-    # to its prediction's log probability.
-    log_probs, log_prob_grads = jax.vmap(grad_fn)(hyper_posterior)
+def svgd(model, mll_fn, bandwidth, optimizer, opt_state):
+    log_probs, log_prob_grads = mll_fn(model)
     # Compute the particles' kernel matrix and its per-particle gradients.
     num_particles = jax.tree_util.tree_flatten(log_prob_grads)[0][0].shape[0]
-    particles_matrix, reconstruct_tree = _to_matrix(hyper_posterior, num_particles)
+    particles_matrix, reconstruct_tree = _to_matrix(model, num_particles)
     kxx, kernel_vjp = jax.vjp(
         lambda x: rbf_kernel(x, particles_matrix, bandwidth), particles_matrix
     )
     # Summing along the 'particles axis' to compute the per-particle gradients, see
     # https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
     kernel_grads = kernel_vjp(-jnp.ones(kxx.shape))[0]
-    stein_grads = (
-        -(kxx @ _to_matrix(log_prob_grads, num_particles)[0] + kernel_grads)
-        / num_particles
-    )
+    score = _to_matrix(log_prob_grads, num_particles)[0]
+    stein_grads = -(kxx @ score + kernel_grads) / num_particles
     stein_grads = reconstruct_tree(stein_grads.ravel())
     updates, new_opt_state = optimizer.update(stein_grads, opt_state)
-    new_params = optax.apply_updates(hyper_posterior, updates)
-    return (ParamsDistribution(*new_params), new_opt_state, log_probs.mean())
+    new_model = optax.apply_updates(model, updates)
+    return new_model, new_opt_state, log_probs.mean()
 
 
 def _to_matrix(params, num_particles):
@@ -103,17 +79,17 @@ def _to_matrix(params, num_particles):
     return matrix, reconstruct_tree
 
 
-def particle_likelihood(
+def meta_mll(
     meta_batch_x,
     meta_batch_y,
-    prior,
-    hyper_prior,
+    hyper_posterior_particle,
+    hyper_prior_particle,
     key,
     n_prior_samples,
     prior_weight,
 ):
     def estimate_mll(x, y):
-        prior_samples = prior.sample(key, n_prior_samples)
+        prior_samples = hyper_posterior_particle.sample(key, n_prior_samples)
         y_hat, stddevs = predict(prior_samples, x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
         batch_size = x.shape[0]
@@ -126,7 +102,9 @@ def particle_likelihood(
     # @ Algorithm 1 PACOH with SVGD approximation of Q∗ (MLL_Estimator)
     # @ https://arxiv.org/pdf/2002.05551.pdf.
     mll = jax.vmap(estimate_mll)(meta_batch_x, meta_batch_y)
-    log_prob_prior = hyper_prior.log_prob(prior) * prior_weight
+    log_prob_prior = (
+        hyper_prior_particle.log_prob(hyper_posterior_particle) * prior_weight
+    )
     return (mll + log_prob_prior).mean()
 
 
@@ -144,34 +122,51 @@ def rbf_kernel(x, y, bandwidth=None):
     return k_xy
 
 
+def mll(batch_x, batch_y, model, prior, prior_weight):
+    y_hat, stddevs = jax.vmap(model)(batch_x)
+    log_likelihood = (
+        distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(batch_y).mean()
+    )
+    log_prior = prior.log_prob(model)
+    return log_likelihood + log_prior * prior_weight
+
+
 def infer_posterior(
     x,
     y,
-    prior,
+    hyper_posterior,
     update_steps,
     learning_rate,
+    n_prior_samples,
+    key,
+    prior_weight=1e-7,
+    bandwidth=10.0,
 ):
     # Sample prior parameters from the hyper-posterior to form an ensemble
     # of neural networks.
+    priors = hyper_posterior.sample(key, n_prior_samples)
+    # Marginalize over samples of each particle in the hyper-posterior.
+    prior = jax.tree_map(lambda x: x.mean(0), priors)
     optimizer = optax.flatten(optax.adam(learning_rate))
     opt_state = optimizer.init(prior)
-
-    def loss(model):
-        y_hat, stddevs = predict(model, x)
-        log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
-        return -log_likelihood.mean()
+    mll_grads = jax.value_and_grad(
+        lambda model, prior: mll(x, y, model, prior, prior_weight)
+    )
+    # vmap mll over svgd particles.
+    mll_fn = jax.vmap(mll_grads)
+    partial_mll_fn = lambda model: mll_fn(model, hyper_posterior)
 
     def update(carry, _):
         model, opt_state = carry
-        values, grads = jax.value_and_grad(loss)(model)
-        updates, opt_state = optimizer.update(grads, opt_state)
-        model = optax.apply_updates(model, updates)
-        return (model, opt_state), values.mean()
+        model, opt_state, mll_value = svgd(
+            model, partial_mll_fn, bandwidth, optimizer, opt_state
+        )
+        return (model, opt_state), mll_value
 
-    (posterior, _), losses = jax.lax.scan(
+    (posterior, _), mll_values = jax.lax.scan(
         update, (prior, opt_state), None, update_steps
     )
-    return posterior, losses
+    return posterior, mll_values
 
 
 def predict(model, x):
