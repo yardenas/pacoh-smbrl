@@ -60,3 +60,7 @@ def grouper(iterable, n, *, incomplete="fill", fillvalue=None):
         return zip(*args)
     else:
         raise ValueError("Expected fill or ignore")
+
+
+def inv_softplus(x):
+    return jnp.where(x < 20.0, jnp.log(jnp.exp(x) - 1.0), x)

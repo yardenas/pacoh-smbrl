@@ -1,4 +1,3 @@
-import copy
 import functools
 
 import distrax
@@ -9,6 +8,7 @@ import numpy as np
 import optax
 
 from smbrl.models import ParamsDistribution
+from smbrl.utils import inv_softplus
 
 
 def meta_train(
@@ -19,23 +19,36 @@ def meta_train(
     opt_state,
     iterations,
     n_prior_samples,
+    key,
+    prior_weight=1e-4,
+    bandwidth=10.0,
 ):
-    hyper_posterior = copy.deepcopy(hyper_posterior)
-    for i in range(iterations):
-        meta_batch_x, meta_batch_y = next(data)
+    def _update(carry, inputs):
+        hyper_posterior, opt_state = carry
+        key = inputs
+        key, next_key = jax.random.split(key)
+        ids = jax.random.choice(next_key, num_examples - 1)
+        meta_batch_x, meta_batch_y = jax.tree_map(lambda x: x[ids], data)
         hyper_posterior, opt_state, log_probs = train_step(
             meta_batch_x,
             meta_batch_y,
             hyper_prior,
             hyper_posterior,
-            jax.random.PRNGKey(0),
+            key,
             n_prior_samples,
             optimizer,
             opt_state,
+            prior_weight,
+            bandwidth,
         )
-        if i % 100 == 0:
-            print(f"Iteration {i} log probs: {log_probs}")
-    return hyper_posterior, opt_state
+        return (hyper_posterior, opt_state), log_probs
+
+    num_examples = data[0].shape[0]
+    return jax.lax.scan(
+        _update,
+        (hyper_posterior, opt_state),
+        jnp.asarray(jax.random.split(key, iterations)),
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(5, 6))
@@ -48,6 +61,8 @@ def train_step(
     n_prior_samples,
     optimizer,
     opt_state,
+    prior_weight,
+    bandwidth,
 ):
     grad_fn = jax.value_and_grad(
         lambda hyper_posterior: particle_likelihood(
@@ -57,6 +72,7 @@ def train_step(
             hyper_prior,
             key,
             n_prior_samples,
+            prior_weight,
         )
     )
     # vmap to compute the grads for each particle in the ensemble with respect
@@ -66,13 +82,13 @@ def train_step(
     num_particles = jax.tree_util.tree_flatten(log_prob_grads)[0][0].shape[0]
     particles_matrix, reconstruct_tree = _to_matrix(hyper_posterior, num_particles)
     kxx, kernel_vjp = jax.vjp(
-        lambda x: rbf_kernel(x, particles_matrix, 10.0), particles_matrix
+        lambda x: rbf_kernel(x, particles_matrix, bandwidth), particles_matrix
     )
     # Summing along the 'particles axis' to compute the per-particle gradients, see
     # https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
     kernel_grads = kernel_vjp(-jnp.ones(kxx.shape))[0]
     stein_grads = (
-        -(jnp.matmul(kxx, _to_matrix(log_prob_grads, num_particles)[0]) + kernel_grads)
+        -(kxx @ _to_matrix(log_prob_grads, num_particles)[0] + kernel_grads)
         / num_particles
     )
     stein_grads = reconstruct_tree(stein_grads.ravel())
@@ -94,6 +110,7 @@ def particle_likelihood(
     hyper_prior,
     key,
     n_prior_samples,
+    prior_weight,
 ):
     def estimate_mll(x, y):
         prior_samples = prior.sample(key, n_prior_samples)
@@ -109,7 +126,7 @@ def particle_likelihood(
     # @ Algorithm 1 PACOH with SVGD approximation of Q∗ (MLL_Estimator)
     # @ https://arxiv.org/pdf/2002.05551.pdf.
     mll = jax.vmap(estimate_mll)(meta_batch_x, meta_batch_y)
-    log_prob_prior = hyper_prior.log_prob(prior) * 1e-4
+    log_prob_prior = hyper_prior.log_prob(prior) * prior_weight
     return (mll + log_prob_prior).mean()
 
 
@@ -181,11 +198,14 @@ def make_hyper_prior(model):
     return hyper_prior
 
 
-def make_hyper_posterior(make_model, key, n_particles):
+def make_hyper_posterior(make_model, key, n_particles, stddev=1e-7):
+    stddev_scale = inv_softplus(stddev)
     init_ensemble = jax.vmap(make_model)
     particles_mus = init_ensemble(jnp.asarray(jax.random.split(key, n_particles)))
     particles_mus = jax.tree_map(lambda x: jnp.zeros_like(x), particles_mus)
-    particle_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * -15.0, particles_mus)
+    particle_stddevs = jax.tree_map(
+        lambda x: jnp.ones_like(x) * stddev_scale, particles_mus
+    )
     # Create a distribution over ensembles of NNs.
     hyper_posterior = ParamsDistribution(particles_mus, particle_stddevs)
     return hyper_posterior

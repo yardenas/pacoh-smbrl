@@ -8,6 +8,7 @@ import numpy as np
 import optax
 
 import smbrl.pacoh_nn as pacoh
+from smbrl.utils import inv_softplus
 
 
 class SinusoidRegression:
@@ -61,7 +62,7 @@ class SinusoidRegression:
         return (x1, y1), (x2, y2)
 
 
-class Heterescedastic(eqx.Module):
+class Homoscedastic(eqx.Module):
     layers: list[eqx.nn.Linear]
     mu: eqx.nn.Linear
     stddev: jax.Array
@@ -83,32 +84,47 @@ class Heterescedastic(eqx.Module):
 
 
 def _clip_stddev(stddev, stddev_min, stddev_max, stddev_scale):
-    _inv_softplus = lambda x: jnp.where(x < 20.0, jnp.log(jnp.exp(x) - 1.0), x)
     stddev = jnp.clip(
-        (stddev + _inv_softplus(0.1)) * stddev_scale,
-        _inv_softplus(stddev_min),
-        _inv_softplus(stddev_max),
+        (stddev + inv_softplus(0.1)) * stddev_scale,
+        inv_softplus(stddev_min),
+        inv_softplus(stddev_max),
     )
     return jnn.softplus(stddev)
 
 
+def sample_data(data_generating_process, num_tasks):
+    out = []
+    for _ in range(num_tasks):
+        out.append(next(data_generating_process.train_set))
+    return tuple(map(np.stack, zip(*out)))
+
+
 def test_training():
-    dataset = SinusoidRegression(16, 5, 5)
-    make_model = lambda key: Heterescedastic(1, 32, 1, key)
+    data_generating_process = SinusoidRegression(16, 5, 5)
+    train_dataset = sample_data(data_generating_process, 200)
+    make_model = lambda key: Homoscedastic(1, 32, 1, key)
     key = jax.random.PRNGKey(0)
     hyper_prior = pacoh.make_hyper_prior(make_model(key))
     hyper_posterior = pacoh.make_hyper_posterior(make_model, key, 10)
     opt = optax.flatten(optax.adam(5e-4))
     opt_state = opt.init(hyper_posterior)
-    for epoch in range(4):
-        hyper_posterior, opt_state = pacoh.meta_train(
-            dataset.train_set, hyper_prior, hyper_posterior, opt, opt_state, 5000, 10
+    for _ in range(4):
+        key, key_next = jax.random.split(key)
+        (hyper_posterior, opt_state), _ = eqx.filter_jit(pacoh.meta_train)(
+            train_dataset,
+            hyper_prior,
+            hyper_posterior,
+            opt,
+            opt_state,
+            5000,
+            10,
+            key_next,
         )
         key, key_next = jax.random.split(key)
         priors = hyper_posterior.sample(key_next, 10)
         priors = jax.tree_map(lambda x: x.mean(0), priors)
-        plot_prior(*next(dataset.train_set), priors)
-    (context_x, context_y), (test_x, test_y) = next(dataset.test_set)
+        plot_prior(*next(data_generating_process.train_set), priors)
+    (context_x, context_y), (test_x, test_y) = next(data_generating_process.test_set)
     priors = hyper_posterior.sample(key_next, 10)
     priors = jax.tree_map(lambda x: x.mean(0), priors)
     infer_posteriors = lambda x, y: pacoh.infer_posterior(x, y, priors, 5000, 3e-4)
@@ -126,7 +142,7 @@ def plot_prior(x, y, priors):
     predictions = pacoh.predict(priors, x_pred)
     x = x.reshape(-1, 1)
     y = y.reshape(-1, 1)
-    mu, stddev = predictions
+    mu, _ = predictions
     _, (ax) = plt.subplots(1, 1, figsize=(4, 4))
     ax.scatter(x, y, label="observed", s=5, alpha=0.4)
     ax.plot(
@@ -174,7 +190,15 @@ def plot(x, y, x_tst, y_tst, yhats):
                     label="ensemble means - 3 ensemble stdev" if i == 0 else None,
                 )
             avgm += m
-        plt.plot(x_tst[task], avgm / (i + 1), "r", label="overall mean", linewidth=4)
+        avgm = avgm / (i + 1)
+        epistemic = mus[task].std(0).squeeze(-1)
+        plt.plot(x_tst[task], avgm, "r", label="overall mean", linewidth=4)
+        plt.fill_between(
+            x_tst[task].squeeze(1),
+            avgm - 3 * epistemic,
+            avgm + 3 * epistemic,
+            alpha=0.2,
+        )
         plt.plot(x_tst[task], y_tst[task], "b", label="overall mean", linewidth=1)
         plt.scatter(x[task], y[task], c="b", label="observed")
         ax = plt.gca()
