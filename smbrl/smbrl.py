@@ -56,6 +56,12 @@ class SMBRL:
         self,
         observation: FloatArray,
     ) -> FloatArray:
+        # Algorithm sketch:
+        # 1. Normalize observation
+        # 2. If step mode N == 0:
+        # 3.   update_policy (non-blocking/async, dispatch to a thread).
+        #      Can use splines to make CEM search space better on longer horizons.
+        # 4. get action from current policy.
         normalized_obs = _normalize(
             observation, self.obs_normalizer.result.mean, self.obs_normalizer.result.std
         )

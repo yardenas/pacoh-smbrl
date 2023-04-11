@@ -2,7 +2,6 @@ import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 
 from smbrl.models import ParamsDistribution
@@ -18,7 +17,7 @@ def meta_train(
     iterations,
     n_prior_samples,
     key,
-    prior_weight=1e-4,
+    prior_weight=1e-7,
     bandwidth=10.0,
 ):
     def _update(carry, inputs):
@@ -30,7 +29,7 @@ def meta_train(
         # vmap to compute the grads for each svgd particle.
         mll_fn = jax.vmap(
             jax.value_and_grad(
-                lambda hyper_posterior_particle: meta_mll(
+                lambda hyper_posterior_particle, key: meta_mll(
                     meta_batch_x,
                     meta_batch_y,
                     hyper_posterior_particle,
@@ -42,7 +41,7 @@ def meta_train(
             )
         )
         hyper_posterior, opt_state, log_probs = svgd(
-            hyper_posterior, mll_fn, bandwidth, optimizer, opt_state
+            hyper_posterior, mll_fn, bandwidth, optimizer, opt_state, key=key
         )
         return (hyper_posterior, opt_state), log_probs
 
@@ -54,10 +53,15 @@ def meta_train(
     )
 
 
-def svgd(model, mll_fn, bandwidth, optimizer, opt_state):
-    log_probs, log_prob_grads = mll_fn(model)
+def svgd(model, mll_fn, bandwidth, optimizer, opt_state, *, key=None):
+    num_particles = jax.tree_util.tree_flatten(model)[0][0].shape[0]
+    if key is not None:
+        log_probs, log_prob_grads = mll_fn(
+            model, key=jax.random.split(key, num_particles)
+        )
+    else:
+        log_probs, log_prob_grads = mll_fn(model)
     # Compute the particles' kernel matrix and its per-particle gradients.
-    num_particles = jax.tree_util.tree_flatten(log_prob_grads)[0][0].shape[0]
     particles_matrix, reconstruct_tree = _to_matrix(model, num_particles)
     kxx, kernel_vjp = jax.vjp(
         lambda x: rbf_kernel(x, particles_matrix, bandwidth), particles_matrix
@@ -95,7 +99,7 @@ def meta_mll(
         batch_size = x.shape[0]
         mll = jax.scipy.special.logsumexp(
             log_likelihood, axis=0, b=jnp.sqrt(batch_size)
-        ) - np.log(n_prior_samples)
+        )
         return mll
 
     # vmap estimate_mll over the task batch dimension, as specified
@@ -147,6 +151,7 @@ def infer_posterior(
     priors = hyper_posterior.sample(key, n_prior_samples)
     # Marginalize over samples of each particle in the hyper-posterior.
     prior = jax.tree_map(lambda x: x.mean(0), priors)
+    # prior = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), priors)
     optimizer = optax.flatten(optax.adam(learning_rate))
     opt_state = optimizer.init(prior)
     mll_grads = jax.value_and_grad(
@@ -197,10 +202,11 @@ def make_hyper_posterior(make_model, key, n_particles, stddev=1e-7):
     stddev_scale = inv_softplus(stddev)
     init_ensemble = jax.vmap(make_model)
     particles_mus = init_ensemble(jnp.asarray(jax.random.split(key, n_particles)))
-    particles_mus = jax.tree_map(lambda x: jnp.zeros_like(x), particles_mus)
     particle_stddevs = jax.tree_map(
         lambda x: jnp.ones_like(x) * stddev_scale, particles_mus
     )
     # Create a distribution over ensembles of NNs.
+    # TODO (yarden): make sure that the standard deviation is w.r.t each
+    #  variable of each NN in each ensemble particle.
     hyper_posterior = ParamsDistribution(particles_mus, particle_stddevs)
     return hyper_posterior
