@@ -80,10 +80,10 @@ class Homoscedastic(eqx.Module):
     def __call__(self, x: jax.Array) -> jax.Array:
         for layer in self.layers:
             x = jnn.relu(layer(x))
-        return self.mu(x), _clip_stddev(self.stddev, 0.1, 0.1, 0.1)
+        return self.mu(x), _clip_stddev(self.stddev, 0.5, 1.0)
 
 
-def _clip_stddev(stddev, stddev_min, stddev_max, stddev_scale):
+def _clip_stddev(stddev, stddev_min, stddev_max, stddev_scale=1.0):
     stddev = jnp.clip(
         (stddev + inv_softplus(0.1)) * stddev_scale,
         inv_softplus(stddev_min),
@@ -99,16 +99,94 @@ def sample_data(data_generating_process, num_tasks):
     return tuple(map(np.stack, zip(*out)))
 
 
+def infer_posterior(
+    x,
+    y,
+    model,
+    prior,
+    update_steps,
+    learning_rate,
+    prior_weight=1e-7,
+    bandwidth=10.0,
+):
+    optimizer = optax.flatten(optax.adam(learning_rate))
+    opt_state = optimizer.init(model)
+    mll_grads = jax.value_and_grad(
+        lambda model: pacoh.mll(x, y, model, prior, prior_weight)
+    )
+    # vmap mll over svgd particles.
+    mll_fn = jax.vmap(mll_grads)
+
+    def update(carry, _):
+        model, opt_state = carry
+        model, opt_state, mll_value = pacoh.svgd(
+            model, mll_fn, bandwidth, optimizer, opt_state
+        )
+        return (model, opt_state), mll_value
+
+    (posterior, _), _ = jax.lax.scan(update, (model, opt_state), None, update_steps)
+    return posterior
+
+
+def test_svgd():
+    import matplotlib.pyplot as plt
+
+    from smbrl.models import ParamsDistribution
+
+    data_generating_process = SinusoidRegression(16, 5, 5)
+    test_iter = iter(data_generating_process.test_set)
+    make_model = lambda key: Homoscedastic(1, 32, 1, key)
+    ensemble = jax.vmap(make_model)(jax.random.split(jax.random.PRNGKey(0), 10))
+    dummy_model = make_model(jax.random.PRNGKey(0))
+    prior = ParamsDistribution(
+        jax.tree_map(jnp.zeros_like, dummy_model),
+        jax.tree_map(lambda x: jnp.ones_like(x) * 0.1, dummy_model),
+    )
+    _, axes = plt.subplots(1, 2, figsize=(12.0, 4.0))
+    for i in range(2):
+        (context_x, context_y), (test_x, test_y) = next(test_iter)
+        posterior = infer_posterior(
+            context_x[i], context_y[i], ensemble, prior, 500, 1e-3, 0.001, 1000
+        )
+        predictions = pacoh.predict(posterior, test_x[i])
+        mu, _ = predictions
+        axes[i].plot(
+            np.tile(test_x[i], (mu.shape[0], 1, 1)).squeeze(-1).T,
+            mu.squeeze(-1).T,
+            color="green",
+            alpha=0.3,
+            linewidth=1.0,
+        )
+        epistemic = mu.std(0)
+        mean = mu.mean(0)
+        axes[i].fill_between(
+            test_x[i].squeeze(-1),
+            (mean - 3 * epistemic).squeeze(-1),
+            (mean + 3 * epistemic).squeeze(-1),
+            alpha=0.2,
+        )
+        axes[i].scatter(
+            test_x[i], test_y[i], color="blue", alpha=0.2, label="test data"
+        )
+        axes[i].scatter(context_x[i], context_y[i], color="red", label="train data")
+        axes[i].legend()
+        axes[i].set_xlabel("x")
+        axes[i].set_xlabel("y")
+        axes[i].set_ylim(-3, 3)
+    plt.show()
+
+
 def test_training():
     data_generating_process = SinusoidRegression(16, 5, 5)
     train_dataset = sample_data(data_generating_process, 200)
     make_model = lambda key: Homoscedastic(1, 32, 1, key)
     key = jax.random.PRNGKey(0)
     hyper_prior = pacoh.make_hyper_prior(make_model(key))
-    hyper_posterior = pacoh.make_hyper_posterior(make_model, key, 10, 1e-4)
-    opt = optax.flatten(optax.adam(5e-4))
+    hyper_posterior = pacoh.make_hyper_posterior(make_model, key, 3, 0.3)
+    opt = optax.flatten(optax.adam(1e-3))
     opt_state = opt.init(hyper_posterior)
-    for _ in range(2):
+    train_iter = iter(data_generating_process.train_set)
+    for _ in range(3):
         key, key_next = jax.random.split(key)
         (hyper_posterior, opt_state), _ = eqx.filter_jit(pacoh.meta_train)(
             train_dataset,
@@ -116,18 +194,20 @@ def test_training():
             hyper_posterior,
             opt,
             opt_state,
-            5000,
+            2000,
             10,
             key_next,
+            0.0,
+            1000,
         )
         key, key_next = jax.random.split(key)
-        priors = hyper_posterior.sample(key_next, 10)
-        priors = jax.tree_map(lambda x: x.mean(0), priors)
-        plot_prior(*next(data_generating_process.train_set), priors)
+        priors = jax.vmap(hyper_posterior.sample)(jax.random.split(key_next, 10))
+        priors = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), priors)
+        plot_prior(*next(train_iter), priors)
     (context_x, context_y), (test_x, test_y) = next(data_generating_process.test_set)
     key, key_next = jax.random.split(key)
     infer_posteriors = lambda x, y: pacoh.infer_posterior(
-        x, y, hyper_posterior, 5000, 3e-4, 10, key_next, 1e-8
+        x, y, hyper_posterior, 500, 3e-4, 5, key_next, 1e-7, 1000
     )
     infer_posteriors = jax.jit(jax.vmap(infer_posteriors))
     posteriors, losses = infer_posteriors(context_x, context_y)
@@ -154,6 +234,7 @@ def plot_prior(x, y, priors):
         alpha=0.3,
         linewidth=1.0,
     )
+    ax.set_ylim(-2, 2)
     plt.show()
 
 
@@ -167,7 +248,6 @@ def plot(x, y, x_tst, y_tst, yhats):
         avgm = np.zeros_like(x_tst[task, :, 0])
         for i, (mu, stddev) in enumerate(zip(mus[task], stddevs[task])):
             m = np.squeeze(mu)
-            s = np.squeeze(stddev)
             if i < 15:
                 plt.plot(
                     x_tst[task],
@@ -175,20 +255,6 @@ def plot(x, y, x_tst, y_tst, yhats):
                     "r",
                     label="ensemble means" if i == 0 else None,
                     linewidth=1.0,
-                )
-                plt.plot(
-                    x_tst[task],
-                    m + 3 * s,
-                    "g",
-                    linewidth=0.5,
-                    label="ensemble means + 3 ensemble stdev" if i == 0 else None,
-                )
-                plt.plot(
-                    x_tst[task],
-                    m - 3 * s,
-                    "g",
-                    linewidth=0.5,
-                    label="ensemble means - 3 ensemble stdev" if i == 0 else None,
                 )
             avgm += m
         avgm = avgm / (i + 1)

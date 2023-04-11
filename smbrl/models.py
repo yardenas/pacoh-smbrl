@@ -84,25 +84,18 @@ class Model(eqx.Module):
         return out
 
 
-class ParamsDistribution(NamedTuple):
+class ParamsDistribution(eqx.Module):
     mus: PyTree
     stddev: PyTree
 
     def log_prob(self, other: PyTree) -> jax.Array:
-        dist, self_flat_params, _ = self._to_dist()
+        dist, *_ = self._to_dist()
         flat_params, _ = jax.flatten_util.ravel_pytree(other)
-        if len(flat_params) != len(self_flat_params):
-            quotient, remainder = divmod(len(flat_params), len(self_flat_params))
-            assert (
-                remainder == 0
-            ), "Given parameters are not given in the form of batches of parameters."
-            flat_params = flat_params.reshape((quotient, len(self_flat_params)))
-        return dist.log_prob(flat_params)
+        return dist.log_prob(flat_params) / len(flat_params)
 
-    def sample(self, seed: jax.Array, n_samples: int) -> PyTree:
+    def sample(self, seed: jax.Array) -> PyTree:
         dist, _, pytree_def = self._to_dist()
-        samples = dist.sample(seed=seed, sample_shape=(n_samples,))
-        pytree_def = jax.vmap(pytree_def)
+        samples = dist.sample(seed=seed)
         return pytree_def(samples)
 
     def _to_dist(
@@ -110,6 +103,6 @@ class ParamsDistribution(NamedTuple):
     ) -> tuple[distrax.Distribution, jax.Array, Callable[[jax.Array], PyTree]]:
         self_flat_mus, pytree_def = jax.flatten_util.ravel_pytree(self.mus)
         self_flat_stddevs, _ = jax.flatten_util.ravel_pytree(self.stddev)
-        self_flat_stddevs = jax.nn.softplus(self_flat_stddevs)
+        self_flat_stddevs = jnp.exp(self_flat_stddevs)
         dist = distrax.MultivariateNormalDiag(self_flat_mus, self_flat_stddevs)
         return dist, self_flat_mus, pytree_def

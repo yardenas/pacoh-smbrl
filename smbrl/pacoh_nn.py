@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import optax
 
 from smbrl.models import ParamsDistribution
-from smbrl.utils import inv_softplus
 
 
 def meta_train(
@@ -17,7 +16,7 @@ def meta_train(
     iterations,
     n_prior_samples,
     key,
-    prior_weight=1e-7,
+    prior_weight=1e-4,
     bandwidth=10.0,
 ):
     def _update(carry, inputs):
@@ -93,9 +92,13 @@ def meta_mll(
     prior_weight,
 ):
     def estimate_mll(x, y):
-        prior_samples = hyper_posterior_particle.sample(key, n_prior_samples)
+        prior_samples = jax.vmap(hyper_posterior_particle.sample)(
+            jnp.asarray(jax.random.split(key, n_prior_samples))
+        )
         y_hat, stddevs = predict(prior_samples, x)
-        log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(y)
+        log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(
+            y[None]
+        )
         batch_size = x.shape[0]
         mll = jax.scipy.special.logsumexp(
             log_likelihood, axis=0, b=jnp.sqrt(batch_size)
@@ -146,30 +149,27 @@ def infer_posterior(
     prior_weight=1e-7,
     bandwidth=10.0,
 ):
-    # Sample prior parameters from the hyper-posterior to form an ensemble
+    # Sample model instances from the hyper-posterior to form an ensemble
     # of neural networks.
-    priors = hyper_posterior.sample(key, n_prior_samples)
+    models = jax.vmap(hyper_posterior.sample)(jax.random.split(key, n_prior_samples))
+    models = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), models)
     # Marginalize over samples of each particle in the hyper-posterior.
-    prior = jax.tree_map(lambda x: x.mean(0), priors)
-    # prior = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), priors)
+    prior = jax.tree_map(lambda x: x.mean(0), hyper_posterior)
     optimizer = optax.flatten(optax.adam(learning_rate))
-    opt_state = optimizer.init(prior)
-    mll_grads = jax.value_and_grad(
-        lambda model, prior: mll(x, y, model, prior, prior_weight)
-    )
+    opt_state = optimizer.init(models)
+    mll_grads = jax.value_and_grad(lambda model: mll(x, y, model, prior, prior_weight))
     # vmap mll over svgd particles.
     mll_fn = jax.vmap(mll_grads)
-    partial_mll_fn = lambda model: mll_fn(model, hyper_posterior)
 
     def update(carry, _):
         model, opt_state = carry
         model, opt_state, mll_value = svgd(
-            model, partial_mll_fn, bandwidth, optimizer, opt_state
+            model, mll_fn, bandwidth, optimizer, opt_state
         )
         return (model, opt_state), mll_value
 
     (posterior, _), mll_values = jax.lax.scan(
-        update, (prior, opt_state), None, update_steps
+        update, (models, opt_state), None, update_steps
     )
     return posterior, mll_values
 
@@ -199,14 +199,31 @@ def make_hyper_prior(model):
 
 
 def make_hyper_posterior(make_model, key, n_particles, stddev=1e-7):
-    stddev_scale = inv_softplus(stddev)
-    init_ensemble = jax.vmap(make_model)
-    particles_mus = init_ensemble(jnp.asarray(jax.random.split(key, n_particles)))
+    particle_fn = lambda key: make_hyper_posterior_particle(make_model, key, stddev)
+    return jax.vmap(particle_fn)(jnp.asarray(jax.random.split(key, n_particles)))
+
+
+def make_hyper_posterior_particle(make_model, key, stddev=1e-7):
+    stddev_scale = jnp.log(stddev)
+    particle_mus = make_model(key)
+    mus_empirical_stddev = jax.flatten_util.ravel_pytree(particle_mus)[0].std()
     particle_stddevs = jax.tree_map(
-        lambda x: jnp.ones_like(x) * stddev_scale, particles_mus
+        lambda x: jnp.ones_like(x) * jnp.log(mus_empirical_stddev * stddev + 1e-8),
+        particle_mus,
     )
-    # Create a distribution over ensembles of NNs.
-    # TODO (yarden): make sure that the standard deviation is w.r.t each
-    #  variable of each NN in each ensemble particle.
-    hyper_posterior = ParamsDistribution(particles_mus, particle_stddevs)
-    return hyper_posterior
+    particle_mus = _init_bias(particle_mus, lambda b: jnp.zeros_like(b))
+    particle_stddevs = _init_bias(
+        particle_stddevs, lambda b: jnp.ones_like(b) * stddev_scale
+    )
+    hyper_posterior_particle = ParamsDistribution(particle_mus, particle_stddevs)
+    return hyper_posterior_particle
+
+
+def _init_bias(model, init_fn):
+    is_linear = lambda x: isinstance(x, eqx.nn.Linear)
+    get_biases = lambda m: [
+        x.bias for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear) if is_linear(x)
+    ]
+    new_biases = [init_fn(b) for b in get_biases(model)]
+    new_model = eqx.tree_at(get_biases, model, new_biases)
+    return new_model
