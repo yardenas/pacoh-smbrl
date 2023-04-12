@@ -7,14 +7,15 @@ import numpy as np
 from gymnasium import spaces
 from numpy import typing as npt
 from omegaconf import DictConfig
-from optax import OptState
 
 from smbrl import cem
 from smbrl import metrics as m
+from smbrl import model_learning as ml
 from smbrl.logging import TrainingLogger
 from smbrl.models import Model
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
+from smbrl.types import ModelUpdateFn
 from smbrl.utils import Learner
 
 FloatArray = npt.NDArray[Union[np.float32, np.float64]]
@@ -27,6 +28,7 @@ class SMBRL:
         action_space: spaces.Box,
         config: DictConfig,
         logger: TrainingLogger,
+        model_update_fn: ModelUpdateFn = ml.simple_regression,
     ):
         self.prng = jax.random.PRNGKey(config.training.seed)
         self.config = config
@@ -50,6 +52,7 @@ class SMBRL:
             **config.smbrl.model,
         )
         self.model_learner = Learner(self.model, config.smbrl.model_optimizer)
+        self.model_update_fn = model_update_fn
         self.episodes = 0
 
     def __call__(
@@ -120,33 +123,25 @@ class SMBRL:
         pass
 
     def train(self):
-        for batch in self.replay_buffer.sample(self.config.smbrl.update_steps):
-            loss, self.model, self.model_learner.state = self.update_model(
-                self.model, self.model_learner.state, batch
-            )
-            self.logger["agent/model/loss"] = loss
-        self.logger.log_metrics(self.episodes)
-
-    @eqx.filter_jit
-    def update_model(self, model: Model, opt_state: OptState, batch: TrajectoryData):
-        def loss(
-            model,
-            state_sequence,
-            action_sequence,
-            next_state_sequence,
-            reward_sequence,
-        ):
-            preds = jax.vmap(model)(state_sequence, action_sequence)
-            state_loss = (preds.next_state - next_state_sequence) ** 2
-            reward_loss = (preds.reward.squeeze(-1) - reward_sequence) ** 2
-            return 0.5 * (state_loss.mean() + reward_loss.mean())
-
-        loss_fn = eqx.filter_value_and_grad(loss)
-        loss, grads = loss_fn(
-            model, batch.observation, batch.action, batch.next_observation, batch.reward
+        batches = [
+            batch for batch in self.replay_buffer.sample(self.config.smbrl.update_steps)
+        ]
+        # What happens below:
+        # 1. Transpose list of (named-)tuples into a named tuple of lists
+        # 2. Stack the lists for each data type inside
+        # the named tuple (e.g., observations, actions, etc.)
+        batches = TrajectoryData(*map(np.stack, zip(*batches)))
+        x = ml.to_ins(batches.observation, batches.action)
+        y = ml.to_outs(batches.next_observation, batches.reward)
+        (self.model, self.model_learner.state), loss = self.model_update_fn(
+            (x, y),
+            self.model,
+            self.model_learner,
+            self.model_learner.state,
+            self.prng,
         )
-        new_model, new_opt_state = self.model_learner.grad_step(model, grads, opt_state)
-        return loss, new_model, new_opt_state
+        self.logger["agent/model/loss"] = loss.mean()
+        self.logger.log_metrics(self.episodes)
 
     def __getstate__(self):
         """

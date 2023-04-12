@@ -66,7 +66,9 @@ class Model(eqx.Module):
         reward, reward_stddev = jnp.split(reward, 2, -1)
         next_state_stddev = clip_stddev(next_state_stddev, *self.state_stddev_clip)
         reward_stddev = clip_stddev(reward_stddev, *self.reward_stddev_clip)
-        return Prediction(next_state, reward, next_state_stddev, reward_stddev)
+        return Prediction(
+            next_state, reward[:, 0], next_state_stddev, reward_stddev[:, 0]
+        )
 
     def sample(
         self,
