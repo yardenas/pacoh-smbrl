@@ -187,9 +187,9 @@ def predict(model, x):
 
 def make_hyper_prior(model):
     mean_prior_over_mus = jax.tree_map(jnp.zeros_like, model)
-    stddev_prior_over_mus = jax.tree_map(lambda x: jnp.ones_like(x) * 1.0, model)
-    mean_prior_over_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * 10.0, model)
-    stddev_prior_over_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * 10.0, model)
+    stddev_prior_over_mus = jax.tree_map(lambda x: jnp.ones_like(x) * 0.5, model)
+    mean_prior_over_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * -3.0, model)
+    stddev_prior_over_stddevs = jax.tree_map(lambda x: jnp.ones_like(x) * 0.5, model)
     # Create a distribution over a Mean Field distribution of NNs.
     hyper_prior = ParamsDistribution(
         ParamsDistribution(mean_prior_over_mus, stddev_prior_over_mus),

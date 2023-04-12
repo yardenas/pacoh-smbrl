@@ -197,7 +197,7 @@ def test_training():
             2000,
             10,
             key_next,
-            0.0,
+            1e-4,
             1000,
         )
         key, key_next = jax.random.split(key)

@@ -1,0 +1,2 @@
+class ModelBridge:
+    pass
