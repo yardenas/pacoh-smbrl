@@ -123,7 +123,7 @@ def test_model_learning():
         trajectories.observation[:, context], trajectories.action[:, context:]
     )
     onestep_reward_mse = np.mean(
-        (onestep_predictions.reward.squeeze(-1) - trajectories.reward) ** 2
+        (onestep_predictions.reward - trajectories.reward) ** 2
     )
     onestep_obs_mse = np.mean(
         (onestep_predictions.next_state - trajectories.next_observation) ** 2
@@ -131,8 +131,7 @@ def test_model_learning():
     print(f"One step Reward MSE: {onestep_reward_mse}")
     print(f"One step Observation MSE: {onestep_obs_mse}")
     multistep_reward_mse = np.mean(
-        (multistep_predictions.reward.squeeze(-1) - trajectories.reward[:, context:])
-        ** 2
+        (multistep_predictions.reward - trajectories.reward[:, context:]) ** 2
     )
     multistep_obs_mse = np.mean(
         (multistep_predictions.next_state - trajectories.next_observation[:, context:])
