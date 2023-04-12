@@ -8,7 +8,7 @@ import numpy as np
 import optax
 
 import smbrl.pacoh_nn as pacoh
-from smbrl.utils import inv_softplus
+from smbrl.utils import clip_stddev
 
 
 class SinusoidRegression:
@@ -80,16 +80,7 @@ class Homoscedastic(eqx.Module):
     def __call__(self, x: jax.Array) -> jax.Array:
         for layer in self.layers:
             x = jnn.relu(layer(x))
-        return self.mu(x), _clip_stddev(self.stddev, 0.5, 1.0)
-
-
-def _clip_stddev(stddev, stddev_min, stddev_max, stddev_scale=1.0):
-    stddev = jnp.clip(
-        (stddev + inv_softplus(0.1)) * stddev_scale,
-        inv_softplus(stddev_min),
-        inv_softplus(stddev_max),
-    )
-    return jnn.softplus(stddev)
+        return self.mu(x), clip_stddev(self.stddev, 0.5, 1.0)
 
 
 def sample_data(data_generating_process, num_tasks):
@@ -210,7 +201,7 @@ def test_training():
         x, y, hyper_posterior, 500, 3e-4, 5, key_next, 1e-7, 1000
     )
     infer_posteriors = jax.jit(jax.vmap(infer_posteriors))
-    posteriors, losses = infer_posteriors(context_x, context_y)
+    posteriors, _ = infer_posteriors(context_x, context_y)
     predict = jax.vmap(pacoh.predict)
     predictions = predict(posteriors, test_x)
     plot(context_x, context_y, test_x, test_y, predictions)
@@ -246,7 +237,7 @@ def plot(x, y, x_tst, y_tst, yhats):
     for task in range(6):
         plt.subplot(2, 3, task + 1)
         avgm = np.zeros_like(x_tst[task, :, 0])
-        for i, (mu, stddev) in enumerate(zip(mus[task], stddevs[task])):
+        for i, (mu, _) in enumerate(zip(mus[task], stddevs[task])):
             m = np.squeeze(mu)
             if i < 15:
                 plt.plot(
