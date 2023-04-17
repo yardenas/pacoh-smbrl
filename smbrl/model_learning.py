@@ -35,6 +35,9 @@ def simple_regression(
     def update(carry, inputs):
         model, opt_state = carry
         x, y = inputs
+        if x.ndim == 4:
+            x = x.reshape(-1, *x.shape[2:])
+            y = y.reshape(-1, *y.shape[2:])
         # Bridge to make x -> [obs, acs], vmap over the batch dimension.
         loss = lambda model: l2_loss(bridge_model(jax.vmap(model))(x)[0], y).mean()
         loss, model_grads = jax.value_and_grad(loss)(model)

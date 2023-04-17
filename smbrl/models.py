@@ -1,3 +1,4 @@
+# mypy: disable-error-code="attr-defined"
 from typing import Callable, NamedTuple, Optional
 
 import distrax
@@ -74,16 +75,12 @@ class Model(eqx.Module):
         self,
         horizon: int,
         initial_state: jax.Array,
-        key: jax.Array,
+        key: jax.random.KeyArray,
         action_sequence: Optional[jax.Array] = None,
-        policy=None,
     ) -> Prediction:
         def f(carry, x):
             prev_state = carry
             action, key = x
-            if action is None:
-                assert policy is not None
-                action = policy(prev_state).sample(key)
             out = self(
                 prev_state[None],
                 action[None],
@@ -102,8 +99,8 @@ class Model(eqx.Module):
             init,
             inputs,
         )
-        out = jax.tree_map(lambda x: x.squeeze(1), out)
-        return out
+        squeezed_out: Prediction = jax.tree_map(lambda x: x.squeeze(1), out)
+        return squeezed_out
 
 
 class ParamsDistribution(eqx.Module):
@@ -113,7 +110,8 @@ class ParamsDistribution(eqx.Module):
     def log_prob(self, other: PyTree) -> jax.Array:
         dist, *_ = self._to_dist()
         flat_params, _ = jax.flatten_util.ravel_pytree(other)
-        return dist.log_prob(flat_params) / len(flat_params)
+        logprobs: jax.Array = dist.log_prob(flat_params) / len(flat_params)
+        return logprobs
 
     def sample(self, seed: jax.Array) -> PyTree:
         dist, _, pytree_def = self._to_dist()

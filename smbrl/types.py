@@ -1,6 +1,8 @@
-from typing import Any, Protocol
+from typing import Any, Callable, Iterable, Optional, Protocol, Union
 
 import jax
+import numpy as np
+from numpy import typing as npt
 from optax import OptState
 
 from smbrl.models import Model
@@ -19,4 +21,9 @@ class ModelUpdateFn(Protocol):
         opt_state: OptState,
         key: PRNGKey,
     ) -> tuple[tuple[Model, OptState], jax.Array]:
-        pass
+        ...
+
+
+FloatArray = npt.NDArray[Union[np.float32, np.float64]]
+
+TaskSamplerFactory = Callable[[int, Optional[bool]], Iterable[Any]]

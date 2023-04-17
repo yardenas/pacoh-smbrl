@@ -243,14 +243,15 @@ def plot(x, y, x_tst, y_tst, yhats):
                 plt.plot(
                     x_tst[task],
                     m,
-                    "r",
                     label="ensemble means" if i == 0 else None,
+                    color="green",
+                    alpha=0.3,
                     linewidth=1.0,
                 )
             avgm += m
         avgm = avgm / (i + 1)
         epistemic = mus[task].std(0).squeeze(-1)
-        plt.plot(x_tst[task], avgm, "r", label="overall mean", linewidth=4)
+        plt.plot(x_tst[task], avgm, "g", alpha=0.3, label="overall mean", linewidth=4)
         plt.fill_between(
             x_tst[task].squeeze(1),
             avgm - 3 * epistemic,

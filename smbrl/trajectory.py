@@ -1,16 +1,16 @@
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import numpy as np
 from numpy import typing as npt
 
 
 class Transition(NamedTuple):
-    observation: npt.NDArray[np.float32 | np.float64]
-    next_observation: npt.NDArray[np.float32 | np.float64]
-    action: npt.NDArray[np.float32 | np.float64]
-    reward: npt.NDArray[np.float32 | np.float64]
-    cost: npt.NDArray[np.float32 | np.float64]
+    observation: npt.NDArray[Any]
+    next_observation: npt.NDArray[Any]
+    action: npt.NDArray[Any]
+    reward: npt.NDArray[Any]
+    cost: npt.NDArray[Any]
 
 
 TrajectoryData = Transition

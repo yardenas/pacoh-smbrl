@@ -5,6 +5,7 @@ from hydra import compose, initialize
 from smbrl import acting
 from smbrl.trainer import Trainer
 from smbrl.trajectory import TrajectoryData
+from smbrl.utils import normalize
 
 
 def test_training():
@@ -84,7 +85,7 @@ def test_model_learning():
 
     with Trainer(cfg, make_env, task_sampler) as trainer:
         assert trainer.agent is not None and trainer.env is not None
-        from smbrl.smbrl import SMBRL, _normalize
+        from smbrl.smbrl import SMBRL
 
         rs = np.random.RandomState(0)
         SMBRL.__call__ = lambda self, observation: np.tile(
@@ -97,13 +98,13 @@ def test_model_learning():
         trainer.train(epochs=3)
     agent = trainer.agent
     assert agent is not None
-    trajectories = acting.interact(agent, trainer.env, 1, False)[0].as_numpy()
-    normalize = lambda x: _normalize(
+    trajectories = acting.interact(agent, trainer.env, 1, 1, False)[0].as_numpy()
+    normalize_fn = lambda x: normalize(
         x, agent.obs_normalizer.result.mean, agent.obs_normalizer.result.std
     )
     trajectories = TrajectoryData(
-        normalize(trajectories.observation),
-        normalize(trajectories.next_observation),
+        normalize_fn(trajectories.observation),
+        normalize_fn(trajectories.next_observation),
         trajectories.action,
         trajectories.reward,
         trajectories.cost,

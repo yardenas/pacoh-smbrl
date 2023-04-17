@@ -16,13 +16,10 @@ def make_objective(
 ) -> ObjectiveFn:
     def objective(samples):
         sample = lambda x: model.sample(
-            horizon,
-            initial_state,
-            key=jax.random.PRNGKey(0),
-            action_sequence=x
+            horizon, initial_state, key=jax.random.PRNGKey(0), action_sequence=x
         )
         preds = jax.vmap(sample)(samples)
-        return preds.reward.mean(axis=(1, 2))
+        return preds.reward.mean(axis=1)
 
     return objective
 
@@ -36,7 +33,7 @@ def solve(
     num_elite: int,
     stop_cond: float = 0.1,
     initial_stddev: float = 1.0,
-):
+) -> jax.Array:
     mu = initial_guess
     stddev = jnp.ones_like(initial_guess) * initial_stddev
 

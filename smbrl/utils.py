@@ -8,6 +8,8 @@ import jax.numpy as jnp
 import optax
 from jaxtyping import PyTree
 
+from smbrl.trajectory import TrajectoryData
+
 
 class Learner:
     def __init__(
@@ -74,3 +76,43 @@ def clip_stddev(stddev, stddev_min, stddev_max, stddev_scale=1.0):
         inv_softplus(stddev_max),
     )
     return jnn.softplus(stddev)
+
+
+class PRNGSequence:
+    def __init__(self, seed: int):
+        self.key = jax.random.PRNGKey(seed)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self.key, subkey = jax.random.split(self.key)
+        return subkey
+
+    def take_n(self, n: int):
+        keys = jax.random.split(self.key, n + 1)
+        self.key = keys[0]
+        return keys[1:]
+
+
+def add_to_buffer(buffer, trajectory, normalizer, reward_scale):
+    results = normalizer.result
+    normalize_fn = lambda x: normalize(x, results.mean, results.std)
+    buffer.add(
+        TrajectoryData(
+            normalize_fn(trajectory.observation),
+            normalize_fn(trajectory.next_observation),
+            trajectory.action,
+            trajectory.reward * reward_scale,
+            trajectory.cost,
+        )
+    )
+
+
+def normalize(
+    observation,
+    mean,
+    std,
+):
+    diff = observation - mean
+    return diff / (std + 1e-8)

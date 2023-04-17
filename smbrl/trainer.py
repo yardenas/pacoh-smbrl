@@ -4,18 +4,18 @@ from typing import Any, Callable, Iterable, List, Optional
 import cloudpickle
 import numpy as np
 from gymnasium import Env
+from gymnasium.spaces import Box
 from omegaconf import DictConfig
 
 from smbrl import acting, episodic_async_env, logging, smbrl, utils
-
-TaskSamplerFactory = Callable[[int, Optional[bool]], Iterable[Any]]
+from smbrl.types import TaskSamplerFactory
 
 
 class Trainer:
     def __init__(
         self,
         config: DictConfig,
-        make_env: Callable[[], Env],
+        make_env: Callable[[], Env[Box, Box]],
         task_sampler: TaskSamplerFactory,
         agent: Optional[smbrl.SMBRL] = None,
         start_epoch: int = 0,
@@ -28,9 +28,9 @@ class Trainer:
         self.tasks_sampler = task_sampler
         self.epoch = start_epoch
         self.seeds = seeds
-        self.logger = None
-        self.state_writer = None
-        self.env = None
+        self.logger: Optional[logging.TrainingLogger] = None
+        self.state_writer: Optional[logging.StateWriter] = None
+        self.env: Optional[episodic_async_env.EpisodicAsync] = None
         self.namespace = namespace
 
     def __enter__(self):
@@ -66,7 +66,7 @@ class Trainer:
         self.state_writer.close()
         self.logger.close()
 
-    def train(self, epochs: Optional[int] = None):
+    def train(self, epochs: Optional[int] = None) -> None:
         epoch, logger, state_writer = self.epoch, self.logger, self.state_writer
         assert logger is not None and state_writer is not None
         for epoch in range(epoch, epochs or self.config.training.epochs):
@@ -89,16 +89,22 @@ class Trainer:
             state_writer.write(self.state)
         logger.flush()
 
-    def _step(self, train: bool, episodes_per_task: int, prefix: str, epoch: int):
+    def _step(
+        self, train: bool, episodes_per_task: int, prefix: str, epoch: int
+    ) -> None:
         config, agent, env, logger = self.config, self.agent, self.env, self.logger
         assert env is not None and agent is not None and logger is not None
         render_episodes = int(not train) * self.config.training.render_episodes
+        adaptation_episodes = (
+            episodes_per_task if train else config.training.adaptation_budget
+        )
         summary = acting.epoch(
             agent,
             env,
             self.tasks(train=train),
             episodes_per_task,
-            train=train,
+            adaptation_episodes,
+            train,
             render_episodes=render_episodes,
         )
         step = (
@@ -143,7 +149,9 @@ class Trainer:
         return self.tasks_sampler(self.config.training.task_batch_size, train)
 
     @classmethod
-    def from_pickle(cls, config: DictConfig, namespace: Optional[str] = None):
+    def from_pickle(
+        cls, config: DictConfig, namespace: Optional[str] = None
+    ) -> "Trainer":
         if namespace is not None:
             log_path = f"{config.training.log_dir}/{namespace}"
         else:
