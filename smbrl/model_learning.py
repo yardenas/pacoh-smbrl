@@ -1,8 +1,10 @@
 import jax
 import jax.numpy as jnp
-from optax import l2_loss
+from optax import OptState, l2_loss
 
-from smbrl.types import Data, Learner, Model, OptState, PRNGKey
+from smbrl import types
+from smbrl.models import Model
+from smbrl.utils import Learner
 
 
 def to_ins(observation, action):
@@ -16,7 +18,7 @@ def to_outs(next_state, reward):
 def bridge_model(model):
     def fn(x):
         state_dim = model.state_decoder.out_features // 2
-        obs, acs = jnp.split(x, [state_dim], axis=-1)
+        obs, acs = jnp.split(x, [state_dim], axis=-1)  # type: ignore
         preds = model(obs, acs)
         y_hat = to_outs(preds.next_state, preds.reward)
         stddev = to_outs(preds.next_state_stddev, preds.reward_stddev)
@@ -26,12 +28,12 @@ def bridge_model(model):
 
 
 def simple_regression(
-    data: Data,
+    data: types.Data,
     model: Model,
     learner: Learner,
     opt_state: OptState,
-    key: PRNGKey,
-):
+    key: jax.random.KeyArray,
+) -> types.ModelUpdate:
     def update(carry, inputs):
         model, opt_state = carry
         x, y = inputs

@@ -6,7 +6,7 @@ from smbrl.trajectory import TrajectoryData
 from smbrl.utils import PRNGSequence
 
 
-class AgentBase:
+class AgentBase(types.Agent):
     def __init__(
         self,
         config: DictConfig,
@@ -15,6 +15,7 @@ class AgentBase:
         self.prng = PRNGSequence(config.training.seed)
         self.config = config
         self.logger = logger
+        self.episodes = 0
 
     def __call__(
         self,
@@ -22,10 +23,10 @@ class AgentBase:
     ) -> types.FloatArray:
         raise NotImplementedError
 
-    def observe(self, trajectory: TrajectoryData):
+    def observe(self, trajectory: TrajectoryData) -> None:
         raise NotImplementedError
 
-    def adapt(self, trajectory: TrajectoryData):
+    def adapt(self, trajectory: TrajectoryData) -> None:
         pass
 
     def reset(self):

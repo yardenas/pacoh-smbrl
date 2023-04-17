@@ -1,5 +1,7 @@
+# type: ignore
 from typing import Iterable, Optional
 
+import pytest
 from hydra import compose, initialize
 
 from smbrl import acting
@@ -8,7 +10,8 @@ from smbrl.trajectory import TrajectoryData
 from smbrl.utils import normalize
 
 
-def test_training():
+@pytest.mark.parametrize("agent", ["asmbrl", "smbrl"], ids=["asmbrl", "smbrl"])
+def test_training(agent):
     with initialize(version_base=None, config_path="../smbrl/"):
         cfg = compose(
             config_name="config",
@@ -19,22 +22,18 @@ def test_training():
                 "training.parallel_envs=5",
                 "training.eval_every=1",
                 "training.action_repeat=4",
-                "smbrl.model.n_layers=1",
-                "smbrl.model.hidden_size=32",
-                "smbrl.update_steps=1",
-                "smbrl.replay_buffer.sequence_length=16",
+                f"agents.{agent}.model.n_layers=1",
+                f"agents.{agent}.model.hidden_size=32",
+                f"agents.{agent}.update_steps=1",
+                f"agents.{agent}.replay_buffer.sequence_length=16",
             ],
         )
-    if not cfg.training.jit:
-        from jax.config import config as jax_config  # pyright: ignore
-
-        jax_config.update("jax_disable_jit", True)
 
     def make_env():
         import gymnasium as gym
 
         env = gym.make("Pendulum-v1", render_mode="rgb_array")
-        env._max_episode_steps = cfg.training.time_limit  # type: ignore
+        env._max_episode_steps = cfg.training.time_limit
 
         return env
 
@@ -46,7 +45,8 @@ def test_training():
         trainer.train(epochs=1)
 
 
-def test_model_learning():
+@pytest.mark.parametrize("agent", ["asmbrl", "smbrl"], ids=["asmbrl", "smbrl"])
+def test_model_learning(agent):
     import jax
     import numpy as np
 
@@ -60,22 +60,18 @@ def test_model_learning():
                 "training.parallel_envs=5",
                 "training.render_episodes=0",
                 "training.scale_reward=0.1",
-                "smbrl.model.n_layers=2",
-                "smbrl.model.hidden_size=64",
-                "smbrl.update_steps=100",
-                "smbrl.replay_buffer.sequence_length=30",
+                f"agents.{agent}.model.n_layers=2",
+                f"agents.{agent}.model.hidden_size=64",
+                f"agents.{agent}.update_steps=100",
+                f"agents.{agent}.replay_buffer.sequence_length=30",
             ],
         )
-    if not cfg.training.jit:
-        from jax.config import config as jax_config  # pyright: ignore
-
-        jax_config.update("jax_disable_jit", True)
 
     def make_env():
         import gymnasium as gym
 
         env = gym.make("Pendulum-v1")
-        env._max_episode_steps = cfg.training.time_limit  # type: ignore
+        env._max_episode_steps = cfg.training.time_limit
 
         return env
 
@@ -85,11 +81,11 @@ def test_model_learning():
 
     with Trainer(cfg, make_env, task_sampler) as trainer:
         assert trainer.agent is not None and trainer.env is not None
-        from smbrl.smbrl import SMBRL
+        from smbrl.agents.smbrl import SMBRL
 
         rs = np.random.RandomState(0)
         SMBRL.__call__ = lambda self, observation: np.tile(
-            rs.uniform(-1.0, 1.0, trainer.env.action_space.shape),  # type: ignore
+            rs.uniform(-1.0, 1.0, trainer.env.action_space.shape),
             (
                 cfg.training.task_batch_size,
                 1,

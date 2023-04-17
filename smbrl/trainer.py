@@ -7,8 +7,8 @@ from gymnasium import Env
 from gymnasium.spaces import Box
 from omegaconf import DictConfig
 
-from smbrl import acting, episodic_async_env, logging, smbrl, utils
-from smbrl.types import TaskSamplerFactory
+from smbrl import acting, agents, episodic_async_env, logging, utils
+from smbrl.types import Agent, TaskSamplerFactory
 
 
 class Trainer:
@@ -17,7 +17,7 @@ class Trainer:
         config: DictConfig,
         make_env: Callable[[], Env[Box, Box]],
         task_sampler: TaskSamplerFactory,
-        agent: Optional[smbrl.SMBRL] = None,
+        agent: Optional[Agent] = None,
         start_epoch: int = 0,
         seeds: Optional[List[int]] = None,
         namespace: Optional[str] = None,
@@ -53,7 +53,7 @@ class Trainer:
         else:
             self.env.reset(seed=self.config.training.seed, options={"task": tasks})
         if self.agent is None:
-            self.agent = smbrl.SMBRL(
+            self.agent = agents.make(
                 self.env.observation_space,
                 self.env.action_space,
                 self.config,

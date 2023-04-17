@@ -1,5 +1,6 @@
-from typing import Callable
+from typing import Callable, TypedDict
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 
@@ -10,13 +11,11 @@ ObjectiveFn = Callable[[jax.Array], jax.Array]
 
 
 def make_objective(
-    model: m.Model,
-    horizon: int,
-    initial_state: jax.Array,
+    model: m.Model, horizon: int, initial_state: jax.Array, key: jax.random.KeyArray
 ) -> ObjectiveFn:
     def objective(samples):
         sample = lambda x: model.sample(
-            horizon, initial_state, key=jax.random.PRNGKey(0), action_sequence=x
+            horizon, initial_state, key=key, action_sequence=x
         )
         preds = jax.vmap(sample)(samples)
         return preds.reward.mean(axis=1)
@@ -61,3 +60,35 @@ def solve(
         cond, body, (key, 0, mu, stddev, -jnp.inf, initial_guess)
     )
     return best
+
+
+class CEMConfig(TypedDict):
+    num_particles: int
+    num_iters: int
+    num_elite: int
+    stop_cond: float
+    initial_stddev: float
+
+
+@eqx.filter_jit
+def policy(
+    observation: jax.Array,
+    model: m.Model,
+    horizon: int,
+    init_guess: jax.Array,
+    key: jax.random.KeyArray,
+    cem_config: CEMConfig,
+) -> jax.Array:
+    def batched_solve(observation):
+        n_key, _ = jax.random.split(key)
+        objective = make_objective(model, horizon, observation, n_key)
+        action = solve(
+            objective,
+            init_guess,
+            key,
+            **cem_config,
+        )[0]
+        return action
+
+    actions: jax.Array = jax.vmap(batched_solve)(observation)
+    return actions

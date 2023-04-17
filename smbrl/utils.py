@@ -42,8 +42,8 @@ def all_finite(tree):
     if not leaves:
         return jnp.array(True)
     else:
-        leaves = map(jnp.isfinite, leaves)
-        leaves = map(jnp.all, leaves)
+        leaves = list(map(jnp.isfinite, leaves))
+        leaves = list(map(jnp.all, leaves))
         return jnp.stack(list(leaves)).all()
 
 
@@ -89,7 +89,7 @@ class PRNGSequence:
         self.key, subkey = jax.random.split(self.key)
         return subkey
 
-    def take_n(self, n: int):
+    def take_n(self, n):
         keys = jax.random.split(self.key, n + 1)
         self.key = keys[0]
         return keys[1:]

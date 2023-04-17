@@ -1,3 +1,4 @@
+# type: ignore
 from typing import Iterator, Tuple
 
 import equinox as eqx

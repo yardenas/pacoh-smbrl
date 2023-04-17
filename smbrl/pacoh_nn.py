@@ -198,7 +198,7 @@ def make_hyper_prior(model):
     return hyper_prior
 
 
-def make_hyper_posterior(make_model, key, n_particles, stddev=1e-7):
+def make_hyper_posterior(make_model, key, n_particles, stddev=0.1):
     particle_fn = lambda key: make_hyper_posterior_particle(make_model, key, stddev)
     return jax.vmap(particle_fn)(jnp.asarray(jax.random.split(key, n_particles)))
 
