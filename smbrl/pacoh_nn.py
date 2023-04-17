@@ -63,7 +63,7 @@ def svgd(model, mll_fn, bandwidth, optimizer, opt_state, *, key=None):
     # Compute the particles' kernel matrix and its per-particle gradients.
     particles_matrix, reconstruct_tree = _to_matrix(model, num_particles)
     kxx, kernel_vjp = jax.vjp(
-        lambda x: rbf_kernel(x, particles_matrix, bandwidth), particles_matrix
+        lambda x: rbf_kernel(x, particles_matrix, bandwidth), particles_matrix  # type: ignore # noqa E501
     )
     # Summing along the 'particles axis' to compute the per-particle gradients, see
     # https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
@@ -77,7 +77,7 @@ def svgd(model, mll_fn, bandwidth, optimizer, opt_state, *, key=None):
 
 
 def _to_matrix(params, num_particles):
-    flattened_params, reconstruct_tree = jax.flatten_util.ravel_pytree(params)
+    flattened_params, reconstruct_tree = jax.flatten_util.ravel_pytree(params)  # type: ignore # noqa E501
     matrix = flattened_params.reshape((num_particles, -1))
     return matrix, reconstruct_tree
 
@@ -206,7 +206,7 @@ def make_hyper_posterior(make_model, key, n_particles, stddev=0.1):
 def make_hyper_posterior_particle(make_model, key, stddev=1e-7):
     stddev_scale = jnp.log(stddev)
     particle_mus = make_model(key)
-    mus_empirical_stddev = jax.flatten_util.ravel_pytree(particle_mus)[0].std()
+    mus_empirical_stddev = jax.flatten_util.ravel_pytree(particle_mus)[0].std()  # type: ignore # noqa E501
     particle_stddevs = jax.tree_map(
         lambda x: jnp.ones_like(x) * jnp.log(mus_empirical_stddev * stddev + 1e-8),
         particle_mus,

@@ -6,6 +6,7 @@ import numpy as np
 from gymnasium import spaces
 from omegaconf import DictConfig
 
+import smbrl.model_learning as ml
 from smbrl import metrics as m
 from smbrl import pacoh_nn as pch
 from smbrl.agents.base import AgentBase
@@ -13,7 +14,7 @@ from smbrl.logging import TrainingLogger
 from smbrl.models import Model
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
-from smbrl.types import FloatArray
+from smbrl.types import Data, FloatArray
 from smbrl.utils import Learner, add_to_buffer
 
 
@@ -90,6 +91,15 @@ class ASMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
+        data = ml.prepare_data(self.slow_buffer, self.config.asmbrl.update_steps)
+        pacoh_config = self.config.asmblr.pacoh
+        self.adaptive_model.update_hyper_posterior(
+            data,
+            next(self.prng),
+            pacoh_config.n_prior_samples,
+            pacoh_config.prior_weight,
+            pacoh_config.bandwidth,
+        )
         self.episodes += 1
 
     def adapt(self, trajectory: TrajectoryData) -> None:
@@ -116,6 +126,27 @@ class AdaptiveBayesianModel:
             config.agents.asmbrl.pacoh.n_particles,
             config.agents.asmbrl.pacoh.posterior_stddev,
         )
-        self.model_learner = Learner(
+        self.learner = Learner(
             self.hyper_posterior, config.agents.asmbrl.model_optimizer
+        )
+        self.posteriors = self.hyper_posterior.sample(key)
+
+    def update_hyper_posterior(
+        self,
+        data: Data,
+        key: jax.random.KeyArray,
+        n_prior_samples: int,
+        prior_weight: float,
+        bandwidth: float,
+    ) -> None:
+        (self.hyper_posterior, self.learner.state), logprobs = ml.pacoh_regression(
+            data,
+            self.hyper_prior,
+            self.hyper_posterior,
+            self.learner,
+            self.learner.state,
+            n_prior_samples,
+            prior_weight,
+            bandwidth,
+            key,
         )

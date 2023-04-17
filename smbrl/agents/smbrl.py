@@ -89,19 +89,7 @@ class SMBRL(AgentBase):
         self.episodes += 1
 
     def update_model(self):
-        batches = [
-            batch
-            for batch in self.replay_buffer.sample(
-                self.config.agents.smbrl.update_steps
-            )
-        ]
-        # What happens below:
-        # 1. Transpose list of (named-)tuples into a named tuple of lists
-        # 2. Stack the lists for each data type inside
-        # the named tuple (e.g., observations, actions, etc.)
-        transposed_batches = TrajectoryData(*map(np.stack, zip(*batches)))
-        x = ml.to_ins(transposed_batches.observation, transposed_batches.action)
-        y = ml.to_outs(transposed_batches.next_observation, transposed_batches.reward)
+        x, y = ml.prepare_data(self.replay_buffer, self.config.smbrl.update_steps)
         (self.model, self.model_learner.state), loss = ml.simple_regression(
             (x, y),
             self.model,

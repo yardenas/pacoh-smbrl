@@ -9,7 +9,6 @@ from optax import OptState
 from smbrl import logging
 from smbrl.models import Model
 from smbrl.trajectory import TrajectoryData
-from smbrl.utils import Learner
 
 Data = tuple[jax.Array, jax.Array]
 
@@ -32,18 +31,6 @@ class Agent(Protocol):
         ...
 
     def reset(self) -> None:
-        ...
-
-
-class ModelUpdateFn(Protocol):
-    def __call__(
-        self,
-        data: Data,
-        model: Model,
-        learner: Learner,
-        opt_state: OptState,
-        key: jax.random.KeyArray,
-    ) -> ModelUpdate:
         ...
 
 
