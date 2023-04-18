@@ -3,7 +3,7 @@ from typing import Any, Iterable
 import numpy as np
 from tqdm import tqdm
 
-from smbrl.episodic_async_env import EpisodicAsync
+from smbrl.episodic_async_env import EpisodicAsync  # type: ignore
 from smbrl.iteration_summary import IterationSummary
 from smbrl.logging import TrainingLogger
 from smbrl.trajectory import Trajectory, TrajectoryData, Transition

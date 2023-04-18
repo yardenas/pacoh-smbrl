@@ -23,5 +23,10 @@ asmbrl:
     posterior_stddev: 0.3
     n_prior_samples: 5
     prior_weight: 0.1
-    bandwidth: 10
-    
+    bandwidth: 10.
+  posterior:
+    update_steps: 10
+    n_prior_samples: 5
+    learning_rate: 1e-3
+    prior_weight: 1e-4
+    bandwidth: 10.

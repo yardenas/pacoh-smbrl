@@ -1,5 +1,6 @@
 from typing import Callable
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -12,10 +13,36 @@ from smbrl import pacoh_nn as pch
 from smbrl.agents.base import AgentBase
 from smbrl.logging import TrainingLogger
 from smbrl.models import Model
-from smbrl.replay_buffer import ReplayBuffer
+from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import Data, FloatArray
 from smbrl.utils import Learner, add_to_buffer
+
+
+def buffer_factory(
+    buffer_type,
+    observation_shape,
+    action_shape,
+    max_length,
+    seed,
+    precision,
+    sequence_length,
+    num_shots,
+):
+    cls = dict(slow=ReplayBuffer, fast=OnPolicyReplayBuffer)[buffer_type]
+    make = lambda capacity, budget, batch_size: cls(
+        observation_shape=observation_shape,
+        action_shape=action_shape,
+        max_length=max_length,
+        seed=seed,
+        precision=precision,
+        sequence_length=sequence_length,
+        num_shots=num_shots,
+        batch_size=batch_size,
+        capacity=capacity,
+        num_episodes=budget,
+    )
+    return make
 
 
 class ASMBRL(AgentBase):
@@ -28,7 +55,7 @@ class ASMBRL(AgentBase):
     ):
         super().__init__(config, logger)
         self.obs_normalizer = m.MetricsAccumulator()
-        buffer_factory = lambda c, b: ReplayBuffer(
+        buffer_kwargs = dict(
             observation_shape=observation_space.shape,
             action_shape=action_space.shape,
             max_length=config.training.time_limit // config.training.action_repeat,
@@ -37,16 +64,16 @@ class ASMBRL(AgentBase):
             sequence_length=config.agents.asmbrl.replay_buffer.sequence_length
             // config.training.action_repeat,
             num_shots=config.agents.asmbrl.replay_buffer.num_shots,
-            batch_size=config.agents.asmbrl.replay_buffer.batch_size,
-            capacity=c,
-            num_episodes=b,
         )
-        self.slow_buffer = buffer_factory(
+        self.slow_buffer = buffer_factory("slow", **buffer_kwargs)(
             config.agents.asmbrl.replay_buffer.capacity,
             config.training.episodes_per_task,
+            config.agents.asmbrl.replay_buffer.batch_size,
         )
-        self.fast_buffer = buffer_factory(
-            config.training.parallel_envs, config.training.adaptation_budget
+        self.fast_buffer = buffer_factory("fast", **buffer_kwargs)(
+            config.training.parallel_envs,
+            config.training.adaptation_budget,
+            32,
         )
         model_factory = lambda key: Model(
             state_dim=np.prod(observation_space.shape),
@@ -92,13 +119,13 @@ class ASMBRL(AgentBase):
             self.config.training.scale_reward,
         )
         data = ml.prepare_data(self.slow_buffer, self.config.agents.asmbrl.update_steps)
-        pacoh_config = self.config.agents.asmbrl.pacoh
+        pacoh_cfg = self.config.agents.asmbrl.pacoh
         self.adaptive_model.update_hyper_posterior(
             data,
             next(self.prng),
-            pacoh_config.n_prior_samples,
-            pacoh_config.prior_weight,
-            pacoh_config.bandwidth,
+            pacoh_cfg.n_prior_samples,
+            pacoh_cfg.prior_weight,
+            pacoh_cfg.bandwidth,
         )
         self.episodes += 1
 
@@ -109,6 +136,20 @@ class ASMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
+        posterior_cfg = self.config.agents.asmbrl.posterior
+        data = ml.prepare_data(self.fast_buffer, posterior_cfg.update_steps)
+        self.adaptive_model.infer_posteriors(
+            data,
+            next(self.prng),
+            posterior_cfg.update_steps,
+            posterior_cfg.n_prior_samples,
+            posterior_cfg.learning_rate,
+            posterior_cfg.prior_weight,
+            posterior_cfg.bandwidth,
+        )
+
+    def reset(self):
+        self.adaptive_model.reset_model(next(self.prng))
 
 
 class AdaptiveBayesianModel:
@@ -140,7 +181,8 @@ class AdaptiveBayesianModel:
         prior_weight: float,
         bandwidth: float,
     ) -> None:
-        (self.hyper_posterior, self.learner.state), logprobs = ml.pacoh_regression(
+        pacoh = eqx.filter_jit(ml.pacoh_regression)
+        (self.hyper_posterior, self.learner.state), logprobs = pacoh(
             data,
             self.hyper_prior,
             self.hyper_posterior,
@@ -151,3 +193,29 @@ class AdaptiveBayesianModel:
             bandwidth,
             key,
         )
+
+    def infer_posteriors(
+        self,
+        data: Data,
+        key: jax.random.KeyArray,
+        update_steps: int,
+        n_prior_samples: int,
+        learning_rate: float,
+        prior_weight: float,
+        bandwidth: float,
+    ) -> None:
+        infer_posterior_per_task = lambda data: pch.infer_posterior(
+            data,
+            self.hyper_posterior,
+            update_steps,
+            n_prior_samples,
+            learning_rate,
+            key,
+            prior_weight,
+            bandwidth,
+        )
+        infer_posterior_per_task = jax.jit(jax.vmap(infer_posterior_per_task, 1))
+        self.posteriors, _ = infer_posterior_per_task(data)
+
+    def reset_model(self, key: jax.random.KeyArray) -> None:
+        self.posteriors = self.hyper_posterior.sample(key)

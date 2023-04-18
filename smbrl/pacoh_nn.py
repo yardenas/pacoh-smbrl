@@ -139,12 +139,11 @@ def mll(batch_x, batch_y, model, prior, prior_weight):
 
 
 def infer_posterior(
-    x,
-    y,
+    data,
     hyper_posterior,
-    update_steps,
-    learning_rate,
+    iterations,
     n_prior_samples,
+    learning_rate,
     key,
     prior_weight=1e-7,
     bandwidth=10.0,
@@ -157,19 +156,26 @@ def infer_posterior(
     prior = jax.tree_map(lambda x: x.mean(0), hyper_posterior)
     optimizer = optax.flatten(optax.adam(learning_rate))
     opt_state = optimizer.init(models)
-    mll_grads = jax.value_and_grad(lambda model: mll(x, y, model, prior, prior_weight))
-    # vmap mll over svgd particles.
-    mll_fn = jax.vmap(mll_grads)
+    num_examples = data[0].shape[0]
 
-    def update(carry, _):
+    def update(carry, inputs):
         model, opt_state = carry
+        key = inputs
+        key, next_key = jax.random.split(key)
+        ids = jax.random.choice(next_key, num_examples)
+        x, y = jax.tree_map(lambda x: x[ids], data)
+        mll_grads = jax.value_and_grad(
+            lambda model: mll(x, y, model, prior, prior_weight)
+        )
+        # vmap mll over svgd particles.
+        mll_fn = jax.vmap(mll_grads)
         model, opt_state, mll_value = svgd(
             model, mll_fn, bandwidth, optimizer, opt_state
         )
         return (model, opt_state), mll_value
 
     (posterior, _), mll_values = jax.lax.scan(
-        update, (models, opt_state), None, update_steps
+        update, (models, opt_state), jnp.asarray(jax.random.split(key, iterations))
     )
     return posterior, mll_values
 

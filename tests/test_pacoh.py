@@ -199,10 +199,10 @@ def test_training():
     (context_x, context_y), (test_x, test_y) = next(data_generating_process.test_set)
     key, key_next = jax.random.split(key)
     infer_posteriors = lambda x, y: pacoh.infer_posterior(
-        x, y, hyper_posterior, 500, 3e-4, 5, key_next, 1e-7, 1000
+        (x, y), hyper_posterior, 500, 5, 3e-4, key_next, 1e-7, 1000
     )
-    infer_posteriors = jax.jit(jax.vmap(infer_posteriors))
-    posteriors, _ = infer_posteriors(context_x, context_y)
+    infer_posteriors = jax.jit(jax.vmap(infer_posteriors, 1))
+    posteriors, _ = infer_posteriors(context_x[None], context_y[None])
     predict = jax.vmap(pacoh.predict)
     predictions = predict(posteriors, test_x)
     plot(context_x, context_y, test_x, test_y, predictions)
