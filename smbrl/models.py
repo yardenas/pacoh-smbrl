@@ -8,7 +8,7 @@ import jax.nn as jnn
 import jax.numpy as jnp
 from jaxtyping import PyTree
 
-from smbrl.utils import clip_stddev, inv_softplus
+from smbrl.utils import clip_stddev
 
 
 class Prediction(NamedTuple):
@@ -33,12 +33,12 @@ class Model(eqx.Module):
         action_dim: int,
         hidden_size: int,
         state_stddev_clip: tuple[float, float] = (
-            float(inv_softplus(0.5)),
-            float(inv_softplus(1.0)),
+            0.5,
+            1.0,
         ),
         reward_stddev_clip: tuple[float, float] = (
-            float(inv_softplus(0.5)),
-            float(inv_softplus(1.0)),
+            0.5,
+            1.0,
         ),
         *,
         key: jax.Array
