@@ -89,7 +89,9 @@ class SMBRL(AgentBase):
         self.episodes += 1
 
     def update_model(self):
-        x, y = ml.prepare_data(self.replay_buffer, self.config.smbrl.update_steps)
+        x, y = ml.prepare_data(
+            self.replay_buffer, self.config.agents.smbrl.update_steps
+        )
         (self.model, self.model_learner.state), loss = ml.simple_regression(
             (x, y),
             self.model,

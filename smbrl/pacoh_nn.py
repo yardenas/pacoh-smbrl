@@ -23,7 +23,7 @@ def meta_train(
         hyper_posterior, opt_state = carry
         key = inputs
         key, next_key = jax.random.split(key)
-        ids = jax.random.choice(next_key, num_examples - 1)
+        ids = jax.random.choice(next_key, num_examples)
         meta_batch_x, meta_batch_y = jax.tree_map(lambda x: x[ids], data)
         # vmap to compute the grads for each svgd particle.
         mll_fn = jax.vmap(

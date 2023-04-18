@@ -2,17 +2,16 @@ from typing import Any, Callable, Iterable, Optional, Protocol, Union
 
 import jax
 import numpy as np
+import optax
+from jaxtyping import PyTree
 from numpy import typing as npt
 from omegaconf import DictConfig
-from optax import OptState
 
 from smbrl import logging
-from smbrl.models import Model
 from smbrl.trajectory import TrajectoryData
 
 Data = tuple[jax.Array, jax.Array]
 
-ModelUpdate = tuple[tuple[Model, OptState], jax.Array]
 FloatArray = npt.NDArray[Union[np.float32, np.float64]]
 
 
@@ -35,3 +34,5 @@ class Agent(Protocol):
 
 
 TaskSamplerFactory = Callable[[int, Optional[bool]], Iterable[Any]]
+
+ModelUpdate = tuple[tuple[PyTree, optax.OptState], jax.Array]

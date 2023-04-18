@@ -75,7 +75,7 @@ class ASMBRL(AgentBase):
         horizon = self.config.agents.asmbrl.plan_horizon
         init_guess = jnp.zeros((horizon, self.fast_buffer.action.shape[-1]))
         action = init_guess[0]
-        return np.asarray(action)
+        return np.repeat(np.asarray(action)[None], observation.shape[0], axis=0)
 
     def observe(self, trajectory: TrajectoryData) -> None:
         self.obs_normalizer.update_state(
@@ -91,8 +91,8 @@ class ASMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        data = ml.prepare_data(self.slow_buffer, self.config.asmbrl.update_steps)
-        pacoh_config = self.config.asmblr.pacoh
+        data = ml.prepare_data(self.slow_buffer, self.config.agents.asmbrl.update_steps)
+        pacoh_config = self.config.agents.asmbrl.pacoh
         self.adaptive_model.update_hyper_posterior(
             data,
             next(self.prng),
@@ -118,7 +118,8 @@ class AdaptiveBayesianModel:
         key: jax.random.KeyArray,
         config: DictConfig,
     ):
-        self.hyper_prior = pch.make_hyper_prior(model_factory)
+        key, n_key = jax.random.split(key)
+        self.hyper_prior = pch.make_hyper_prior(model_factory(n_key))
         key, n_key = jax.random.split(key)
         self.hyper_posterior = pch.make_hyper_posterior(
             model_factory,

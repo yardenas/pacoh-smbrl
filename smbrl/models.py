@@ -53,12 +53,8 @@ class Model(eqx.Module):
         self.state_stddev_clip = state_stddev_clip
         self.reward_stddev_clip = reward_stddev_clip
 
-    def __call__(
-        self, state_sequence: jax.Array, action_sequence: jax.Array
-    ) -> Prediction:
-        x = jax.vmap(self.encoder)(
-            jnp.concatenate([state_sequence, action_sequence], -1)
-        )
+    def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
+        x = jax.vmap(self.encoder)(x)
         for layer in self.layers:
             x = jnn.relu(jax.vmap(layer)(x))
         next_state = jax.vmap(self.state_decoder)(x)
@@ -67,9 +63,26 @@ class Model(eqx.Module):
         reward, reward_stddev = jnp.split(reward, 2, -1)
         next_state_stddev = clip_stddev(next_state_stddev, *self.state_stddev_clip)
         reward_stddev = clip_stddev(reward_stddev, *self.reward_stddev_clip)
-        return Prediction(
-            next_state, reward[:, 0], next_state_stddev, reward_stddev[:, 0]
+        return (
+            to_outs(next_state, reward.squeeze(-1)),
+            to_outs(next_state_stddev, reward_stddev.squeeze(-1)),
         )
+
+    def step(self, state: jax.Array, action: jax.Array) -> Prediction:
+        batched = True
+        if state.ndim == 1:
+            state, action = state[None], action[None]
+            batched = False
+        x = to_ins(state, action)
+        mus, stddevs = self(x)
+        if not batched:
+            mus, stddevs = mus.squeeze(0), stddevs.squeeze(0)
+        split = lambda x: jnp.split(x, [self.state_decoder.out_features // 2], axis=-1)  # type: ignore # noqa: E501
+        state_mu, reward_mu = split(mus)
+        state_stddev, reward_stddev = split(stddevs)
+        reward_mu = reward_mu.squeeze(-1)
+        reward_stddev = reward_stddev.squeeze(-1)
+        return Prediction(state_mu, reward_mu, state_stddev, reward_stddev)
 
     def sample(
         self,
@@ -81,11 +94,11 @@ class Model(eqx.Module):
         def f(carry, x):
             prev_state = carry
             action, key = x
-            out = self(
-                prev_state[None],
-                action[None],
+            out = self.step(
+                prev_state,
+                action,
             )
-            return out.next_state[0], out
+            return out.next_state, out
 
         if action_sequence is None:
             assert action_sequence is not None
@@ -99,8 +112,15 @@ class Model(eqx.Module):
             init,
             inputs,
         )
-        squeezed_out: Prediction = jax.tree_map(lambda x: x.squeeze(1), out)
-        return squeezed_out
+        return out  # type: ignore
+
+
+def to_ins(observation, action):
+    return jnp.concatenate([observation, action], -1)
+
+
+def to_outs(next_state, reward):
+    return jnp.concatenate([next_state, reward[..., None]], -1)
 
 
 class ParamsDistribution(eqx.Module):

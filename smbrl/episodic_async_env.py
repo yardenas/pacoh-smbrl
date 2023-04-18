@@ -1,3 +1,4 @@
+# type: ignore
 import atexit
 import functools
 import multiprocessing as mp
@@ -5,11 +6,9 @@ import sys
 import traceback
 from collections.abc import Iterable
 from enum import Enum
-from typing import Callable
 
 import cloudpickle
 import numpy as np
-from gymnasium import Env
 from gymnasium.spaces import Box
 from gymnasium.wrappers.clip_action import ClipAction
 from gymnasium.wrappers.rescale_action import RescaleAction
@@ -36,10 +35,10 @@ class Protocol(Enum):
 class EpisodicAsync:
     def __init__(
         self,
-        ctor: Callable[[], Env],
-        vector_size: int = 1,
-        time_limit: int = 1000,
-        action_repeat: int = 1,
+        ctor,
+        vector_size=1,
+        time_limit=1000,
+        action_repeat=1,
     ):
         self.env_fn = cloudpickle.dumps(ctor)
         self.time_limit = time_limit

@@ -7,10 +7,10 @@ import numpy.typing as npt
 
 @dataclass
 class Metrics:
-    mean: npt.NDArray[Any]
-    var: npt.NDArray[Any]
-    min: npt.NDArray[Any]
-    max: npt.NDArray[Any]
+    mean: npt.ArrayLike
+    var: npt.ArrayLike
+    min: npt.ArrayLike
+    max: npt.ArrayLike
 
     @property
     def std(self) -> npt.NDArray[Any]:
@@ -30,7 +30,7 @@ class MetricsAccumulator:
 
     def update_state(
         self, sample: float | npt.NDArray[Any], axis: int | Sequence[int] = 0
-    ):
+    ) -> None:
         if isinstance(sample, float) or sample.ndim == 0:
             sample = np.array(
                 [
@@ -49,7 +49,7 @@ class MetricsAccumulator:
         batch_max = sample.max(axis=axis)
         delta = batch_mean - self._state.mean
         new_mean = self._state.mean + delta * batch_count / (self._count + batch_count)
-        m_a = self._state.var * self._count
+        m_a = self._state.var * self._count  # type: ignore
         m_b = batch_var * batch_count
         self._m2 = (
             m_a
