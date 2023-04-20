@@ -99,7 +99,8 @@ def test_model_learning(agent):
         trainer.train(epochs=3)
     agent = trainer.agent
     assert agent is not None
-    trajectories = acting.interact(agent, trainer.env, 1, 1, False)[0].as_numpy()
+    summary = acting.epoch(agent, trainer.env, trainer.tasks(True), 1, 1, True)
+    trajectories = summary._data[0][0].as_numpy()
     normalize_fn = lambda x: normalize(
         x, agent.obs_normalizer.result.mean, agent.obs_normalizer.result.std
     )
@@ -124,20 +125,16 @@ def test_model_learning(agent):
     multistep_predictions = jax.vmap(sample)(
         trajectories.observation[:, context], trajectories.action[:, context:]
     )
-    onestep_reward_mse = np.mean(
-        (onestep_predictions.reward - trajectories.reward) ** 2
-    )
-    onestep_obs_mse = np.mean(
-        (onestep_predictions.next_state - trajectories.next_observation) ** 2
-    )
+    l2 = lambda x, y: ((x - y) ** 2).mean()
+    onestep_reward_mse = l2(onestep_predictions.reward, trajectories.reward)
+    onestep_obs_mse = l2(onestep_predictions.next_state, trajectories.next_observation)
     print(f"One step Reward MSE: {onestep_reward_mse}")
     print(f"One step Observation MSE: {onestep_obs_mse}")
-    multistep_reward_mse = np.mean(
-        (multistep_predictions.reward - trajectories.reward[:, context:]) ** 2
+    multistep_reward_mse = l2(
+        multistep_predictions.reward, trajectories.reward[:, context:]
     )
-    multistep_obs_mse = np.mean(
-        (multistep_predictions.next_state - trajectories.next_observation[:, context:])
-        ** 2
+    multistep_obs_mse = l2(
+        multistep_predictions.next_state, trajectories.next_observation[:, context:]
     )
     print(f"Multistep step Reward MSE: {multistep_reward_mse}")
     print(f"Multistep Observation MSE: {multistep_obs_mse}")
