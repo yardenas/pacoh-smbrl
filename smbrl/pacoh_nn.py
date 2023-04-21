@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import optax
 
 from smbrl.models import ParamsDistribution
+from smbrl.utils import ensemble_predict
 
 
 def meta_train(
@@ -178,23 +179,6 @@ def infer_posterior(
         update, (models, opt_state), jnp.asarray(jax.random.split(key, iterations))
     )
     return posterior, mll_values
-
-
-def ensemble_predict(fn):
-    """
-    A decorator that wraps (parameterized-)functions such that if they define
-    an ensemble, predictions are made for each member of the ensemble individually.
-    """
-
-    def vmap_ensemble(*args, **kwargs):
-        # First vmap along the batch dimension.
-        ensemble_predict = lambda fn: jax.vmap(fn)(*args, **kwargs)
-        # then vmap over members of the ensemble, such that each
-        # individually computes outputs.
-        ensemble_predict = eqx.filter_vmap(ensemble_predict)
-        return ensemble_predict(fn)
-
-    return vmap_ensemble
 
 
 def make_hyper_prior(model):

@@ -13,11 +13,11 @@ ObjectiveFn = Callable[[jax.Array], jax.Array]
 def make_objective(
     model: m.Model, horizon: int, initial_state: jax.Array, key: jax.random.KeyArray
 ) -> ObjectiveFn:
-    def objective(samples):
+    def objective(candidates):
         sample = lambda x: model.sample(
             horizon, initial_state, key=key, action_sequence=x
         )
-        preds = jax.vmap(sample)(samples)
+        preds = jax.vmap(sample)(candidates)
         return preds.reward.mean(axis=1)
 
     return objective

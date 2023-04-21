@@ -101,7 +101,6 @@ class Model(eqx.Module):
             return out.next_state, out
 
         if action_sequence is None:
-            assert action_sequence is not None
             action_sequence = [None] * horizon
         else:
             assert len(action_sequence) == horizon
