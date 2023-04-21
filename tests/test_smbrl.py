@@ -1,6 +1,9 @@
 # type: ignore
+import importlib
 from typing import Iterable, Optional
 
+import jax
+import numpy as np
 import pytest
 from hydra import compose, initialize
 
@@ -29,28 +32,28 @@ def test_training(agent):
                 f"agents.{agent}.replay_buffer.sequence_length=16",
             ],
         )
-
-    def make_env():
-        import gymnasium as gym
-
-        env = gym.make("Pendulum-v1", render_mode="rgb_array")
-        env._max_episode_steps = cfg.training.time_limit
-
-        return env
-
-    def task_sampler(dummy: int, dummy2: Optional[bool] = False) -> Iterable[int]:
-        for _ in range(cfg.training.task_batch_size):
-            yield 1
-
-    with Trainer(cfg, make_env, task_sampler) as trainer:
+    sampler = lambda *args, **kwargs: task_sampler(cfg, *args, **kwargs)
+    env = lambda: make_env(cfg)
+    with Trainer(cfg, env, sampler) as trainer:
         trainer.train(epochs=1)
+
+
+def make_env(cfg):
+    import gymnasium as gym
+
+    env = gym.make("Pendulum-v1")
+    env._max_episode_steps = cfg.training.time_limit
+
+    return env
+
+
+def task_sampler(cfg, dummy: int, dummy2: Optional[bool] = False) -> Iterable[int]:
+    for _ in range(cfg.training.task_batch_size):
+        yield 1
 
 
 @pytest.mark.parametrize("agent", ["asmbrl", "smbrl"], ids=["asmbrl", "smbrl"])
 def test_model_learning(agent):
-    import jax
-    import numpy as np
-
     with initialize(version_base=None, config_path="../smbrl/"):
         cfg = compose(
             config_name="config",
@@ -68,23 +71,10 @@ def test_model_learning(agent):
                 f"agents.{agent}.replay_buffer.sequence_length=30",
             ],
         )
-
-    def make_env():
-        import gymnasium as gym
-
-        env = gym.make("Pendulum-v1")
-        env._max_episode_steps = cfg.training.time_limit
-
-        return env
-
-    def task_sampler(dummy: int, dummy2: Optional[bool] = False) -> Iterable[int]:
-        for _ in range(cfg.training.task_batch_size):
-            yield 1
-
-    with Trainer(cfg, make_env, task_sampler) as trainer:
+    sampler = lambda *args, **kwargs: task_sampler(cfg, *args, **kwargs)
+    env = lambda: make_env(cfg)
+    with Trainer(cfg, env, sampler) as trainer:
         assert trainer.agent is not None and trainer.env is not None
-        import importlib
-
         agent_module = importlib.import_module(f"smbrl.agents.{agent}")
         agent_class = getattr(agent_module, agent.upper())
 
@@ -96,11 +86,12 @@ def test_model_learning(agent):
                 1,
             ),
         )
-        trainer.train(epochs=3)
+        trainer.train(epochs=1)
     agent = trainer.agent
     assert agent is not None
-    summary = acting.epoch(agent, trainer.env, trainer.tasks(True), 1, 1, True)
-    trajectories = summary._data[0][0].as_numpy()
+    trainer.env.reset(options={"task": list(trainer.tasks(True))})
+    summary = acting.interact(agent, trainer.env, 1, 1, True)
+    trajectories = summary[0].as_numpy()
     normalize_fn = lambda x: normalize(
         x, agent.obs_normalizer.result.mean, agent.obs_normalizer.result.std
     )
@@ -111,20 +102,45 @@ def test_model_learning(agent):
         trajectories.reward,
         trajectories.cost,
     )
-    onestep_predictions = jax.vmap(agent.model.step)(
-        trajectories.observation, trajectories.action
-    )
+    trajectories = TrajectoryData(*map(lambda x: x[:, None], trajectories))
     context = 10
     horizon = trajectories.observation.shape[1] - context
-    sample = lambda obs, acs: agent.model.sample(
-        horizon,
-        obs,
-        action_sequence=acs,
-        key=jax.random.PRNGKey(0),
-    )
-    multistep_predictions = jax.vmap(sample)(
-        trajectories.observation[:, context], trajectories.action[:, context:]
-    )
+    # FIXME (yarden): Rewrite this section, especially the smbrl part.
+    if agent == "smbrl":
+        onestep_predictions = jax.vmap(agent.model.step)(
+            trajectories.observation, trajectories.action
+        )
+        sample = lambda obs, acs: agent.model.sample(
+            horizon,
+            obs,
+            action_sequence=acs,
+            key=jax.random.PRNGKey(0),
+        )
+        multistep_predictions = jax.vmap(sample)(
+            trajectories.observation[:, context], trajectories.action[:, context:]
+        )
+    else:
+        import smbrl.agents.asmbrl as asmbrl
+
+        step = jax.vmap(lambda m, o, a: asmbrl.ensemble_predict(m.step)(o, a))
+        onestep_predictions = step(
+            agent.model, trajectories.observation, trajectories.action
+        )
+        onestep_predictions = jax.vmap(asmbrl.step)(
+            agent.model, trajectories.observation, trajectories.action
+        )
+        sample = lambda model, obs, acs: asmbrl.sample(
+            model,
+            horizon,
+            obs,
+            action_sequence=acs,
+            key=jax.random.PRNGKey(0),
+        )
+        multistep_predictions = jax.vmap(sample)(
+            agent.model,
+            trajectories.observation[:, :, context],
+            trajectories.action[:, :, context:],
+        )
     l2 = lambda x, y: ((x - y) ** 2).mean()
     onestep_reward_mse = l2(onestep_predictions.reward, trajectories.reward)
     onestep_obs_mse = l2(onestep_predictions.next_state, trajectories.next_observation)

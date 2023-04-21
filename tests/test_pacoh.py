@@ -91,6 +91,10 @@ def sample_data(data_generating_process, num_tasks):
     return tuple(map(np.stack, zip(*out)))
 
 
+def predict(model, x):
+    return pacoh.ensemble_predict(model)(x)
+
+
 def infer_posterior(
     x,
     y,
@@ -140,7 +144,7 @@ def test_svgd():
         posterior = infer_posterior(
             context_x[i], context_y[i], ensemble, prior, 500, 1e-3, 0.001, 1000
         )
-        predictions = pacoh.predict(posterior, test_x[i])
+        predictions = predict(posterior, test_x[i])
         mu, _ = predictions
         axes[i].plot(
             np.tile(test_x[i], (mu.shape[0], 1, 1)).squeeze(-1).T,
@@ -203,8 +207,8 @@ def test_training():
     )
     infer_posteriors = jax.jit(jax.vmap(infer_posteriors, 1))
     posteriors, _ = infer_posteriors(context_x[None], context_y[None])
-    predict = jax.vmap(pacoh.predict)
-    predictions = predict(posteriors, test_x)
+    predict_tasks = jax.vmap(predict)
+    predictions = predict_tasks(posteriors, test_x)
     plot(context_x, context_y, test_x, test_y, predictions)
 
 
@@ -212,7 +216,7 @@ def plot_prior(x, y, priors):
     import matplotlib.pyplot as plt
 
     x_pred = np.linspace(-4.0, 4.0, 1000)[:, None]
-    predictions = pacoh.predict(priors, x_pred)
+    predictions = predict(priors, x_pred)
     x = x.reshape(-1, 1)
     y = y.reshape(-1, 1)
     mu, _ = predictions

@@ -95,7 +95,7 @@ def meta_mll(
         prior_samples = jax.vmap(hyper_posterior_particle.sample)(
             jnp.asarray(jax.random.split(key, n_prior_samples))
         )
-        y_hat, stddevs = predict(prior_samples, x)
+        y_hat, stddevs = ensemble_predict(prior_samples)(x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(
             y[None]
         )
@@ -180,15 +180,21 @@ def infer_posterior(
     return posterior, mll_values
 
 
-def predict(model, x):
-    # First vmap along the batch dimension.
-    ensemble_predict = lambda model, x: jax.vmap(model)(x)
-    # then vmap over members of the ensemble.
-    ensemble_predict = eqx.filter_vmap(
-        ensemble_predict, in_axes=(eqx.if_array(0), None)
-    )
-    y_hat, stddev = ensemble_predict(model, x)
-    return y_hat, stddev
+def ensemble_predict(fn):
+    """
+    A decorator that wraps (parameterized-)functions such that if they define
+    an ensemble, predictions are made for each member of the ensemble individually.
+    """
+
+    def vmap_ensemble(*args, **kwargs):
+        # First vmap along the batch dimension.
+        ensemble_predict = lambda fn: jax.vmap(fn)(*args, **kwargs)
+        # then vmap over members of the ensemble, such that each
+        # individually computes outputs.
+        ensemble_predict = eqx.filter_vmap(ensemble_predict)
+        return ensemble_predict(fn)
+
+    return vmap_ensemble
 
 
 def make_hyper_prior(model):
