@@ -10,7 +10,7 @@ from hydra import compose, initialize
 from smbrl import acting
 from smbrl.trainer import Trainer
 from smbrl.trajectory import TrajectoryData
-from smbrl.utils import normalize, ensemble_predict
+from smbrl.utils import ensemble_predict, normalize
 
 
 @pytest.mark.parametrize("agent", ["asmbrl", "smbrl"], ids=["asmbrl", "smbrl"])
@@ -68,6 +68,7 @@ def smbrl_predictions(agent, horizon):
 def asmbrl_predictions(agent, horizon):
     step = jax.vmap(lambda m, o, a: ensemble_predict(m.step)(o, a))
     partial_step = lambda o, a: step(agent.model, o, a)
+    mean_step = lambda o, a: jax.tree_map(lambda x: x.mean(1), partial_step(o, a))
     sample = lambda m, o, a: ensemble_predict(m.sample, (None, 0, None, 0))(
         horizon,
         o,
@@ -76,7 +77,8 @@ def asmbrl_predictions(agent, horizon):
     )
     vmaped_sample = jax.vmap(sample)
     partial_sample = lambda o, a: vmaped_sample(agent.model, o, a)
-    return partial_step, partial_sample
+    mean_sample = lambda o, a: jax.tree_map(lambda x: x.mean(1), partial_sample(o, a))
+    return mean_step, mean_sample
 
 
 @pytest.mark.parametrize(
@@ -151,10 +153,10 @@ def evaluate(onestep_predictions, multistep_predictions, trajectories, context):
     print(f"One step Reward MSE: {onestep_reward_mse}")
     print(f"One step Observation MSE: {onestep_obs_mse}")
     multistep_reward_mse = l2(
-        multistep_predictions.reward, trajectories.reward[:, context:]
+        multistep_predictions.reward, trajectories.reward[:, :, context:]
     )
     multistep_obs_mse = l2(
-        multistep_predictions.next_state, trajectories.next_observation[:, context:]
+        multistep_predictions.next_state, trajectories.next_observation[:, :, context:]
     )
     print(f"Multistep step Reward MSE: {multistep_reward_mse}")
     print(f"Multistep Observation MSE: {multistep_obs_mse}")
@@ -164,15 +166,15 @@ def plot(y, y_hat, context):
     import matplotlib.pyplot as plt
     import numpy as np
 
-    t = np.arange(y.shape[1])
+    t = np.arange(y.shape[2])
 
     plt.figure(figsize=(10, 5), dpi=600)
     for i in range(5):
         plt.subplot(3, 4, i + 1)
-        plt.plot(t, y[i, :, 2], "b.", label="observed")
+        plt.plot(t, y[i, 0, :, 2], "b.", label="observed")
         plt.plot(
             t[context:],
-            y_hat[i, :, 2],
+            y_hat[i, 0, :, 2],
             "r",
             label="prediction",
             linewidth=1.0,

@@ -46,6 +46,7 @@ def simple_regression(
         data,
     )
 
+
 def pacoh_regression(
     data: types.Data,
     hyper_prior: m.ParamsDistribution,

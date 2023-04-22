@@ -8,6 +8,7 @@ from numpy import typing as npt
 from omegaconf import DictConfig
 
 from smbrl import logging
+from smbrl.models import Model
 from smbrl.trajectory import TrajectoryData
 
 Data = tuple[jax.Array, jax.Array]
@@ -19,6 +20,7 @@ class Agent(Protocol):
     logger: logging.TrainingLogger
     config: DictConfig
     episodes: int
+    model: Model
 
     def __call__(self, observation: FloatArray) -> FloatArray:
         ...

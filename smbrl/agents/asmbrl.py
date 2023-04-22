@@ -1,6 +1,5 @@
 from typing import Callable
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -81,9 +80,8 @@ class ASMBRL(AgentBase):
             key=key,
             **config.agents.asmbrl.model,
         )
-        self.adaptive_model = AdaptiveBayesianModel(
-            model_factory, next(self.prng), config
-        )
+        self.pacoh_learner = PACOHLearner(model_factory, next(self.prng), config)
+        self.model = self.pacoh_learner.sample_prior(next(self.prng))
 
     def __call__(
         self,
@@ -120,7 +118,7 @@ class ASMBRL(AgentBase):
         )
         data = ml.prepare_data(self.slow_buffer, self.config.agents.asmbrl.update_steps)
         pacoh_cfg = self.config.agents.asmbrl.pacoh
-        self.adaptive_model.update_hyper_posterior(
+        self.pacoh_learner.update_hyper_posterior(
             data,
             next(self.prng),
             pacoh_cfg.n_prior_samples,
@@ -138,7 +136,7 @@ class ASMBRL(AgentBase):
         )
         posterior_cfg = self.config.agents.asmbrl.posterior
         data = ml.prepare_data(self.fast_buffer, posterior_cfg.update_steps)
-        self.adaptive_model.infer_posteriors(
+        self.model = self.pacoh_learner.infer_posteriors(
             data,
             next(self.prng),
             posterior_cfg.update_steps,
@@ -149,10 +147,45 @@ class ASMBRL(AgentBase):
         )
 
     def reset(self):
-        self.adaptive_model.reset_model(next(self.prng))
+        pass
 
 
-class AdaptiveBayesianModel:
+# class Posterior(eqx.Module):
+#     model: Model
+
+#     # Two challenges:
+#     # 1. How to use the ensemble? (Look below for a hint)
+#     # 2. Overcome the multi-task/batched setting.
+#     def sample(
+#         self,
+#         horizon: int,
+#         initial_state: jax.Array,
+#         key: jax.random.KeyArray,
+#         action_sequence: Optional[jax.Array] = None,
+#     ) -> Prediction:
+#         pass
+#         # TODO (yarden): think of how to use the posterior for sampling.
+#         # Hint: we model/learn trajectories, so the posterior
+#         # predictive distribution is over _trajectories_
+#         ensemble_sample = lambda model: eqx.filter_vmap(model.sample)(
+#             horizon, initial_state, action_sequence
+#         )
+#         ensemble_sample = eqx.filter_vmap(ensemble_sample)
+#         return ensemble_sample(self.model)
+
+#     def step(self, state: jax.Array, action: jax.Array) -> Prediction:
+#         # FIXME: self.model here is wrong. It's fine to have a function that computes
+#         # outputs based on state-action pairs for an ensemble,
+#         # but self.model is an ensemle of ensembles, one ensemble for each task
+#         mus, stddevs = pch.predict(self.model, to_ins(state, action))
+#         state_dim = self.state_decoder.out_features // 2
+#         split = lambda x: jnp.split(x, [state_dim], axis=-1)  # type: ignore
+#         state_mu, reward_mu = split(mus)
+#         state_stddev, reward_stddev = split(stddevs)
+#         return Prediction(state_mu, reward_mu, state_stddev, reward_stddev)
+
+
+class PACOHLearner:
     def __init__(
         self,
         model_factory: Callable[[jax.random.KeyArray], Model],
@@ -171,7 +204,6 @@ class AdaptiveBayesianModel:
         self.learner = Learner(
             self.hyper_posterior, config.agents.asmbrl.model_optimizer
         )
-        self.posteriors = self.hyper_posterior.sample(key)
 
     def update_hyper_posterior(
         self,
@@ -181,8 +213,7 @@ class AdaptiveBayesianModel:
         prior_weight: float,
         bandwidth: float,
     ) -> None:
-        pacoh = eqx.filter_jit(ml.pacoh_regression)
-        (self.hyper_posterior, self.learner.state), logprobs = pacoh(
+        (self.hyper_posterior, self.learner.state), logprobs = ml.pacoh_regression(
             data,
             self.hyper_prior,
             self.hyper_posterior,
@@ -203,19 +234,25 @@ class AdaptiveBayesianModel:
         learning_rate: float,
         prior_weight: float,
         bandwidth: float,
-    ) -> None:
-        infer_posterior_per_task = lambda data: pch.infer_posterior(
-            data,
-            self.hyper_posterior,
-            update_steps,
-            n_prior_samples,
-            learning_rate,
-            key,
-            prior_weight,
-            bandwidth,
-        )
-        infer_posterior_per_task = jax.jit(jax.vmap(infer_posterior_per_task, 1))
-        self.posteriors, _ = infer_posterior_per_task(data)
+    ) -> Model:
+        def infer_posterior_per_task(data):
+            posterior, _ = pch.infer_posterior(
+                data,
+                self.hyper_posterior,
+                update_steps,
+                n_prior_samples,
+                learning_rate,
+                key,
+                prior_weight,
+                bandwidth,
+            )
+            return posterior
 
-    def reset_model(self, key: jax.random.KeyArray) -> None:
-        self.posteriors = self.hyper_posterior.sample(key)
+        # TODO (yarden): can be computed once on an outside scope.
+        infer_posterior_per_task = jax.jit(jax.vmap(infer_posterior_per_task, 1))
+        posteriors: Model = infer_posterior_per_task(data)
+        return posteriors
+
+    def sample_prior(self, key: jax.random.KeyArray) -> Model:
+        model: Model = self.hyper_posterior.sample(key)
+        return model
