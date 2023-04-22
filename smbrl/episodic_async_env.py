@@ -1,4 +1,3 @@
-# type: ignore
 import atexit
 import functools
 import multiprocessing as mp
@@ -6,6 +5,7 @@ import sys
 import traceback
 from collections.abc import Iterable
 from enum import Enum
+from typing import Any
 
 import cloudpickle
 import numpy as np
@@ -102,7 +102,7 @@ class EpisodicAsync:
 
     def step_async(self, actions):
         for parent, action in zip(self.parents, actions):
-            payload = "step", (action,), {}
+            payload = "step", (action,), {}  # type: ignore
             parent.send((Protocol.CALL, payload))
 
     def step_wait(self, **kwargs):
@@ -128,8 +128,8 @@ class EpisodicAsync:
 
     def render(self):
         name = "render"
-        args = ()
-        kwargs = dict()
+        args: tuple[Any, ...] = ()
+        kwargs: dict[str, Any] = dict()
         payload = name, args, kwargs
         max_render = min(5, len(self.parents))
         for i in range(max_render):
@@ -152,7 +152,7 @@ class EpisodicAsync:
         if seed is None:
             per_task_seed = [None] * self.num_envs
         elif isinstance(seed, int):
-            per_task_seed = [seed + i for i in range(self.num_envs)]
+            per_task_seed = [seed + i for i in range(self.num_envs)]  # type: ignore
         else:
             per_task_seed = seed
         assert isinstance(per_task_seed, list) and len(per_task_seed) == self.num_envs
@@ -182,10 +182,10 @@ class EpisodicAsync:
 def _worker(ctor, conn, time_limit, action_repeat):
     try:
         env = TimeLimit(cloudpickle.loads(ctor)(), time_limit)
-        env = RescaleAction(env, -1.0, 1.0)
+        env = RescaleAction(env, -1.0, 1.0)  # type: ignore
         env.action_space = Box(-1.0, 1.0, env.action_space.shape, np.float32)
-        env = ClipAction(env)
-        env = wrappers.ActionRepeat(env, action_repeat)
+        env = ClipAction(env)  # type: ignore
+        env = wrappers.ActionRepeat(env, action_repeat)  # type: ignore
         while True:
             try:
                 # Only block for short times to have keyboard exceptions be raised.

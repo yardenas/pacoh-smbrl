@@ -39,17 +39,28 @@ def test_training(agent):
 
 
 def make_env(cfg):
-    import gymnasium as gym
+    import gymnasium
 
-    env = gym.make("Pendulum-v1")
+    from smbrl.tasks import GravityPendulum, alter_gravity
+    from smbrl.wrappers import MetaEnv
+
+    env = gymnasium.make("Pendulum-v1")
     env._max_episode_steps = cfg.training.time_limit
-
+    env = GravityPendulum(env)
+    env = MetaEnv(env, alter_gravity)
     return env
 
 
-def task_sampler(cfg, dummy: int, dummy2: Optional[bool] = False) -> Iterable[int]:
-    for _ in range(cfg.training.task_batch_size):
-        yield 1
+def task_sampler(cfg, batch_size: int, train: Optional[bool] = False) -> Iterable[int]:
+    rs = np.random.RandomState(cfg.training.seed)
+    train_tasks = rs.uniform(-np.pi, np.pi, batch_size)
+    test_tasks = rs.uniform(-np.pi, np.pi, batch_size)
+    if train:
+        for task in train_tasks:
+            yield task
+    else:
+        for task in test_tasks:
+            yield task
 
 
 def smbrl_predictions(agent, horizon):
