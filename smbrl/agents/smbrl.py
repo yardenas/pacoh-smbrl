@@ -3,12 +3,12 @@ import numpy as np
 from gymnasium import spaces
 from omegaconf import DictConfig
 
-from smbrl import cem
 from smbrl import metrics as m
-from smbrl import model_learning as ml
+from smbrl.agents import cem
+from smbrl.agents import model_learning as ml
 from smbrl.agents.base import AgentBase
+from smbrl.agents.models import Model
 from smbrl.logging import TrainingLogger
-from smbrl.models import Model
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import FloatArray

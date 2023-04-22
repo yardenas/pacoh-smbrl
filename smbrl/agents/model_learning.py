@@ -2,9 +2,9 @@ import jax
 import numpy as np
 from optax import OptState, l2_loss
 
-from smbrl import models as m
-from smbrl import pacoh_nn as pch
 from smbrl import types
+from smbrl.agents import models as m
+from smbrl.agents import pacoh_nn as pch
 from smbrl.trajectory import TrajectoryData
 from smbrl.utils import Learner
 

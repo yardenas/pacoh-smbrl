@@ -6,12 +6,12 @@ import numpy as np
 from gymnasium import spaces
 from omegaconf import DictConfig
 
-import smbrl.model_learning as ml
+import smbrl.agents.model_learning as ml
 from smbrl import metrics as m
-from smbrl import pacoh_nn as pch
+from smbrl.agents import pacoh_nn as pch
 from smbrl.agents.base import AgentBase
+from smbrl.agents.models import Model
 from smbrl.logging import TrainingLogger
-from smbrl.models import Model
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import Data, FloatArray
@@ -148,41 +148,6 @@ class ASMBRL(AgentBase):
 
     def reset(self):
         pass
-
-
-# class Posterior(eqx.Module):
-#     model: Model
-
-#     # Two challenges:
-#     # 1. How to use the ensemble? (Look below for a hint)
-#     # 2. Overcome the multi-task/batched setting.
-#     def sample(
-#         self,
-#         horizon: int,
-#         initial_state: jax.Array,
-#         key: jax.random.KeyArray,
-#         action_sequence: Optional[jax.Array] = None,
-#     ) -> Prediction:
-#         pass
-#         # TODO (yarden): think of how to use the posterior for sampling.
-#         # Hint: we model/learn trajectories, so the posterior
-#         # predictive distribution is over _trajectories_
-#         ensemble_sample = lambda model: eqx.filter_vmap(model.sample)(
-#             horizon, initial_state, action_sequence
-#         )
-#         ensemble_sample = eqx.filter_vmap(ensemble_sample)
-#         return ensemble_sample(self.model)
-
-#     def step(self, state: jax.Array, action: jax.Array) -> Prediction:
-#         # FIXME: self.model here is wrong. It's fine to have a function that computes
-#         # outputs based on state-action pairs for an ensemble,
-#         # but self.model is an ensemle of ensembles, one ensemble for each task
-#         mus, stddevs = pch.predict(self.model, to_ins(state, action))
-#         state_dim = self.state_decoder.out_features // 2
-#         split = lambda x: jnp.split(x, [state_dim], axis=-1)  # type: ignore
-#         state_mu, reward_mu = split(mus)
-#         state_stddev, reward_stddev = split(stddevs)
-#         return Prediction(state_mu, reward_mu, state_stddev, reward_stddev)
 
 
 class PACOHLearner:

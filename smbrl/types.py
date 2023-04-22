@@ -8,7 +8,7 @@ from numpy import typing as npt
 from omegaconf import DictConfig
 
 from smbrl import logging
-from smbrl.models import Model
+from smbrl.agents.models import Model
 from smbrl.trajectory import TrajectoryData
 
 Data = tuple[jax.Array, jax.Array]

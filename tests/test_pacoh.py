@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-import smbrl.pacoh_nn as pacoh
+import smbrl.agents.pacoh_nn as pacoh
 from smbrl.utils import clip_stddev
 
 
@@ -127,7 +127,7 @@ def infer_posterior(
 def test_svgd():
     import matplotlib.pyplot as plt
 
-    from smbrl.models import ParamsDistribution
+    from smbrl.agents.models import ParamsDistribution
 
     data_generating_process = SinusoidRegression(16, 5, 5)
     test_iter = iter(data_generating_process.test_set)

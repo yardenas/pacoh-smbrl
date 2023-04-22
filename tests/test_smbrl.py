@@ -81,29 +81,35 @@ def asmbrl_predictions(agent, horizon):
     return mean_step, mean_sample
 
 
+COMMON = [
+    "training.time_limit=32",
+    "training.episodes_per_task=1",
+    "training.task_batch_size=5",
+    "training.parallel_envs=5",
+    "training.render_episodes=0",
+    "training.scale_reward=0.1",
+]
+
+ASMBRL_CFG = [
+    "agents=asmbrl",
+    "agents.asmbrl.model.n_layers=2",
+    "agents.asmbrl.model.hidden_size=64",
+    "agents.asmbrl.replay_buffer.sequence_length=30",
+    "agents.asmbrl.posterior.prior_weight=0.",
+    "agents.asmbrl.pacoh.prior_weight=0.",
+    "agents.asmbrl.update_steps=100",
+    "agents.asmbrl.posterior.update_steps=100",
+] + COMMON
+
+
 @pytest.mark.parametrize(
-    "agent, pred_fn_factory",
-    [("asmbrl", asmbrl_predictions), ("smbrl", smbrl_predictions)],
+    "agent, pred_fn_factory, overrides",
+    [("asmbrl", asmbrl_predictions, ASMBRL_CFG), ("smbrl", smbrl_predictions, COMMON)],
     ids=["asmbrl", "smbrl"],
 )
-def test_model_learning(agent, pred_fn_factory):
+def test_model_learning(agent, pred_fn_factory, overrides):
     with initialize(version_base=None, config_path="../smbrl/"):
-        cfg = compose(
-            config_name="config",
-            overrides=[
-                "training.time_limit=32",
-                "training.episodes_per_task=1",
-                "training.task_batch_size=5",
-                "training.parallel_envs=5",
-                "training.render_episodes=0",
-                "training.scale_reward=0.1",
-                f"agents={agent}",
-                f"agents.{agent}.model.n_layers=2",
-                f"agents.{agent}.model.hidden_size=64",
-                f"agents.{agent}.update_steps=100",
-                f"agents.{agent}.replay_buffer.sequence_length=30",
-            ],
-        )
+        cfg = compose(config_name="config", overrides=overrides)
     sampler = lambda *args, **kwargs: task_sampler(cfg, *args, **kwargs)
     env = lambda: make_env(cfg)
     with Trainer(cfg, env, sampler) as trainer:
@@ -118,7 +124,7 @@ def test_model_learning(agent, pred_fn_factory):
                 1,
             ),
         )
-        trainer.train(epochs=1)
+        trainer.train(epochs=3)
     agent = trainer.agent
     assert agent is not None
     trainer.env.reset(options={"task": list(trainer.tasks(True))})

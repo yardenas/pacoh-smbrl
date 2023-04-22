@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from smbrl.models import ParamsDistribution
+from smbrl.agents.models import ParamsDistribution
 from smbrl.utils import ensemble_predict
 
 
