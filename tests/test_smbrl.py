@@ -44,7 +44,7 @@ def make_env(cfg):
     from smbrl.tasks import GravityPendulum, alter_gravity
     from smbrl.wrappers import MetaEnv
 
-    env = gymnasium.make("Pendulum-v1")
+    env = gymnasium.make("Pendulum-v1", render_mode="rgb_array")
     env._max_episode_steps = cfg.training.time_limit
     env = GravityPendulum(env)
     env = MetaEnv(env, alter_gravity)

@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-from typing import Callable, NamedTuple, Optional
+from typing import Callable
 
 import distrax
 import equinox as eqx
@@ -8,14 +8,8 @@ import jax.nn as jnn
 import jax.numpy as jnp
 from jaxtyping import PyTree
 
+from smbrl.types import Prediction
 from smbrl.utils import clip_stddev
-
-
-class Prediction(NamedTuple):
-    next_state: jax.Array
-    reward: jax.Array
-    next_state_stddev: jax.Array
-    reward_stddev: jax.Array
 
 
 class Model(eqx.Module):
@@ -89,7 +83,7 @@ class Model(eqx.Module):
         horizon: int,
         initial_state: jax.Array,
         key: jax.random.KeyArray,
-        action_sequence: Optional[jax.Array] = None,
+        action_sequence: jax.Array,
     ) -> Prediction:
         def f(carry, x):
             prev_state = carry
@@ -100,10 +94,6 @@ class Model(eqx.Module):
             )
             return out.next_state, out
 
-        if action_sequence is None:
-            action_sequence = [None] * horizon
-        else:
-            assert len(action_sequence) == horizon
         init = initial_state
         inputs = (action_sequence, jax.random.split(key, horizon))
         _, out = jax.lax.scan(

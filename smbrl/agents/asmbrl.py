@@ -1,5 +1,6 @@
 from typing import Callable
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -8,14 +9,15 @@ from omegaconf import DictConfig
 
 import smbrl.agents.model_learning as ml
 from smbrl import metrics as m
+from smbrl.agents import cem
 from smbrl.agents import pacoh_nn as pch
 from smbrl.agents.base import AgentBase
-from smbrl.agents.models import Model
+from smbrl.agents.models import Model, ParamsDistribution
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import Data, FloatArray
-from smbrl.utils import Learner, add_to_buffer
+from smbrl.utils import Learner, add_to_buffer, ensemble_predict, normalize
 
 
 def buffer_factory(
@@ -42,6 +44,66 @@ def buffer_factory(
         num_episodes=budget,
     )
     return make
+
+
+@eqx.filter_jit
+def policy(
+    model: Model,
+    observation: jax.Array,
+    horizon: int,
+    init_guess: jax.Array,
+    key: jax.random.KeyArray,
+    cem_config: cem.CEMConfig,
+):
+    def sample(m, h, o, k, a):
+        return ensemble_predict(m.sample, (None, 0, None, 0))(
+            h,
+            o[None],
+            k,
+            a[None],
+        )
+
+    partial_sample = lambda h, o, k, a: sample(model, h, o, k, a)
+    mean_sample = lambda h, o, k, a: jax.tree_map(
+        lambda x: x.squeeze(1).mean(0), partial_sample(h, o, k, a)
+    )
+    action = cem.policy(
+        observation,
+        mean_sample,
+        horizon,
+        init_guess,
+        key,
+        cem_config,
+    )
+    return action
+
+
+@eqx.filter_jit
+def infer_posterior_per_task(
+    hyper_posterior: ParamsDistribution,
+    data: Data,
+    key: jax.random.KeyArray,
+    update_steps: int,
+    n_prior_samples: int,
+    learning_rate: float,
+    prior_weight: float,
+    bandwidth: float,
+):
+    def infer_posterior(data):
+        posterior, _ = pch.infer_posterior(
+            data,
+            hyper_posterior,
+            update_steps,
+            n_prior_samples,
+            learning_rate,
+            key,
+            prior_weight,
+            bandwidth,
+        )
+        return posterior
+
+    infer_posterior = jax.vmap(infer_posterior, 1)
+    return infer_posterior(data)
 
 
 class ASMBRL(AgentBase):
@@ -72,7 +134,7 @@ class ASMBRL(AgentBase):
         self.fast_buffer = buffer_factory("fast", **buffer_kwargs)(
             config.training.parallel_envs,
             config.training.adaptation_budget,
-            32,
+            config.agents.asmbrl.replay_buffer.batch_size,
         )
         model_factory = lambda key: Model(
             state_dim=np.prod(observation_space.shape),
@@ -87,20 +149,20 @@ class ASMBRL(AgentBase):
         self,
         observation: FloatArray,
     ) -> FloatArray:
-        # Algorithm sketch:
-        # 1. Normalize observation
-        # 2. If step mode N == 0:
-        # 3.   update_policy (non-blocking/async, dispatch to a thread).
-        #      Can use splines to make CEM search space better on longer horizons.
-        # 4. get action from current policy.
-        # normalized_obs = normalize(
-        #     observation, self.obs_normalizer.result.mean,
-        # self.obs_normalizer.result.std
-        # )
+        normalized_obs = normalize(
+            observation, self.obs_normalizer.result.mean, self.obs_normalizer.result.std
+        )
         horizon = self.config.agents.asmbrl.plan_horizon
         init_guess = jnp.zeros((horizon, self.fast_buffer.action.shape[-1]))
-        action = init_guess[0]
-        return np.repeat(np.asarray(action)[None], observation.shape[0], axis=0)
+        action = policy(
+            self.model,
+            normalized_obs,
+            horizon,
+            init_guess,
+            next(self.prng),
+            self.config.agents.asmbrl.cem,
+        )
+        return np.asarray(action)
 
     def observe(self, trajectory: TrajectoryData) -> None:
         self.obs_normalizer.update_state(
@@ -200,23 +262,16 @@ class PACOHLearner:
         prior_weight: float,
         bandwidth: float,
     ) -> Model:
-        def infer_posterior_per_task(data):
-            posterior, _ = pch.infer_posterior(
-                data,
-                self.hyper_posterior,
-                update_steps,
-                n_prior_samples,
-                learning_rate,
-                key,
-                prior_weight,
-                bandwidth,
-            )
-            return posterior
-
-        # TODO (yarden): can be computed once on an outside scope.
-        infer_posterior_per_task = jax.jit(jax.vmap(infer_posterior_per_task, 1))
-        posteriors: Model = infer_posterior_per_task(data)
-        return posteriors
+        return infer_posterior_per_task(
+            self.hyper_posterior,
+            data,
+            key,
+            update_steps,
+            n_prior_samples,
+            learning_rate,
+            prior_weight,
+            bandwidth,
+        )
 
     def sample_prior(self, key: jax.random.KeyArray) -> Model:
         model: Model = self.hyper_posterior.sample(key)

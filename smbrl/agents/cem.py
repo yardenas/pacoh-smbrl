@@ -4,19 +4,20 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from smbrl.agents import models as m
+from smbrl.types import RolloutFn
 
 SSM = tuple[jax.Array, jax.Array, jax.Array]
 ObjectiveFn = Callable[[jax.Array], jax.Array]
 
 
 def make_objective(
-    model: m.Model, horizon: int, initial_state: jax.Array, key: jax.random.KeyArray
+    rollout_fn: RolloutFn,
+    horizon: int,
+    initial_state: jax.Array,
+    key: jax.random.KeyArray,
 ) -> ObjectiveFn:
     def objective(candidates):
-        sample = lambda x: model.sample(
-            horizon, initial_state, key=key, action_sequence=x
-        )
+        sample = lambda x: rollout_fn(horizon, initial_state, key, x)
         preds = jax.vmap(sample)(candidates)
         return preds.reward.mean(axis=1)
 
@@ -73,7 +74,7 @@ class CEMConfig(TypedDict):
 @eqx.filter_jit
 def policy(
     observation: jax.Array,
-    model: m.Model,
+    rollout_fn: RolloutFn,
     horizon: int,
     init_guess: jax.Array,
     key: jax.random.KeyArray,
@@ -81,7 +82,7 @@ def policy(
 ) -> jax.Array:
     def batched_solve(observation):
         n_key, _ = jax.random.split(key)
-        objective = make_objective(model, horizon, observation, n_key)
+        objective = make_objective(rollout_fn, horizon, observation, n_key)
         action = solve(
             objective,
             init_guess,

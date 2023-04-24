@@ -26,12 +26,16 @@ class GravityPendulum(Wrapper[Box, Box]):
 
         u = np.clip(u, -self.unwrapped.max_torque, self.unwrapped.max_torque)[0]
         self.unwrapped.last_u = u  # for rendering
-        costs = angle_normalize(th) ** 2 + 0.1 * thdot**2 + 0.001 * (u**2)
+        costs = (
+            angle_normalize(th + self.theta_0) ** 2
+            + 0.1 * thdot**2
+            + 0.001 * (u**2)
+        )
 
         newthdot = (
             thdot
             + (
-                3 * g / (2 * length) * np.sin(th + self.unwrapped.theta_0)
+                3 * g / (2 * length) * np.sin(th + self.theta_0)
                 + 3.0 / (m * length**2) * u
             )
             * dt

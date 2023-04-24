@@ -63,7 +63,7 @@ class SMBRL(AgentBase):
         init_guess = jnp.zeros((horizon, self.replay_buffer.action.shape[-1]))
         action = cem.policy(
             normalized_obs,
-            self.model,
+            self.model.sample,
             horizon,
             init_guess,
             next(self.prng),

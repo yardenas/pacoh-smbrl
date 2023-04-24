@@ -1,4 +1,13 @@
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Protocol, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterable,
+    NamedTuple,
+    Optional,
+    Protocol,
+    Union,
+)
 
 import jax
 import numpy as np
@@ -36,6 +45,15 @@ class Agent(Protocol):
         ...
 
 
+class Prediction(NamedTuple):
+    next_state: jax.Array
+    reward: jax.Array
+    next_state_stddev: jax.Array
+    reward_stddev: jax.Array
+
+
 TaskSamplerFactory = Callable[[int, Optional[bool]], Iterable[Any]]
 
 ModelUpdate = tuple[tuple[PyTree, optax.OptState], jax.Array]
+
+RolloutFn = Callable[[int, jax.Array, jax.random.KeyArray, jax.Array], Prediction]

@@ -5,7 +5,6 @@ import sys
 import traceback
 from collections.abc import Iterable
 from enum import Enum
-from typing import Any
 
 import cloudpickle
 import numpy as np
@@ -128,8 +127,8 @@ class EpisodicAsync:
 
     def render(self):
         name = "render"
-        args: tuple[Any, ...] = ()
-        kwargs: dict[str, Any] = dict()
+        args = ()
+        kwargs = dict()
         payload = name, args, kwargs
         max_render = min(5, len(self.parents))
         for i in range(max_render):
