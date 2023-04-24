@@ -64,15 +64,15 @@ def task_sampler(cfg, batch_size: int, train: Optional[bool] = False) -> Iterabl
 
 
 def smbrl_predictions(agent, horizon):
-    # FIXME (yarden): this doesn't support multi-task setting.
-    step = jax.vmap(agent.model.step)
+    # vmap twice, once for the task batch size and second for num shots.
+    step = jax.vmap(jax.vmap(agent.model.step))
     sample = lambda obs, acs: agent.model.sample(
         horizon,
         obs,
         jax.random.PRNGKey(0),
         acs,
     )
-    vmaped_sample = jax.vmap(sample)
+    vmaped_sample = jax.vmap(jax.vmap(sample))
     return step, vmaped_sample
 
 
@@ -101,6 +101,10 @@ COMMON = [
     "training.scale_reward=0.1",
 ]
 
+SMBRL_CFG = [
+    "agents.smbrl.replay_buffer.sequence_length=30",
+] + COMMON
+
 ASMBRL_CFG = [
     "agents=asmbrl",
     "agents.asmbrl.model.n_layers=2",
@@ -115,7 +119,10 @@ ASMBRL_CFG = [
 
 @pytest.mark.parametrize(
     "agent, pred_fn_factory, overrides",
-    [("asmbrl", asmbrl_predictions, ASMBRL_CFG), ("smbrl", smbrl_predictions, COMMON)],
+    [
+        ("asmbrl", asmbrl_predictions, ASMBRL_CFG),
+        ("smbrl", smbrl_predictions, SMBRL_CFG),
+    ],
     ids=["asmbrl", "smbrl"],
 )
 def test_model_learning(agent, pred_fn_factory, overrides):
