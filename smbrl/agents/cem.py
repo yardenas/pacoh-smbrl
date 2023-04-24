@@ -1,28 +1,25 @@
-from typing import Callable
+from typing import Callable, TypedDict
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from smbrl import models as m
+from smbrl.types import RolloutFn
 
 SSM = tuple[jax.Array, jax.Array, jax.Array]
 ObjectiveFn = Callable[[jax.Array], jax.Array]
 
 
 def make_objective(
-    model: m.Model,
+    rollout_fn: RolloutFn,
     horizon: int,
     initial_state: jax.Array,
+    key: jax.random.KeyArray,
 ) -> ObjectiveFn:
-    def objective(samples):
-        sample = lambda x: model.sample(
-            horizon,
-            initial_state,
-            key=jax.random.PRNGKey(0),
-            action_sequence=x
-        )
-        preds = jax.vmap(sample)(samples)
-        return preds.reward.mean(axis=(1, 2))
+    def objective(candidates):
+        sample = lambda x: rollout_fn(horizon, initial_state, key, x)
+        preds = jax.vmap(sample)(candidates)
+        return preds.reward.mean(axis=1)
 
     return objective
 
@@ -36,7 +33,7 @@ def solve(
     num_elite: int,
     stop_cond: float = 0.1,
     initial_stddev: float = 1.0,
-):
+) -> jax.Array:
     mu = initial_guess
     stddev = jnp.ones_like(initial_guess) * initial_stddev
 
@@ -64,3 +61,35 @@ def solve(
         cond, body, (key, 0, mu, stddev, -jnp.inf, initial_guess)
     )
     return best
+
+
+class CEMConfig(TypedDict):
+    num_particles: int
+    num_iters: int
+    num_elite: int
+    stop_cond: float
+    initial_stddev: float
+
+
+@eqx.filter_jit
+def policy(
+    observation: jax.Array,
+    rollout_fn: RolloutFn,
+    horizon: int,
+    init_guess: jax.Array,
+    key: jax.random.KeyArray,
+    cem_config: CEMConfig,
+) -> jax.Array:
+    def batched_solve(observation):
+        n_key, _ = jax.random.split(key)
+        objective = make_objective(rollout_fn, horizon, observation, n_key)
+        action = solve(
+            objective,
+            init_guess,
+            key,
+            **cem_config,
+        )[0]
+        return action
+
+    actions: jax.Array = jax.vmap(batched_solve)(observation)
+    return actions

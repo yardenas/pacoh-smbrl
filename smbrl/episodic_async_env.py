@@ -5,11 +5,9 @@ import sys
 import traceback
 from collections.abc import Iterable
 from enum import Enum
-from typing import Callable
 
 import cloudpickle
 import numpy as np
-from gymnasium import Env
 from gymnasium.spaces import Box
 from gymnasium.wrappers.clip_action import ClipAction
 from gymnasium.wrappers.rescale_action import RescaleAction
@@ -36,10 +34,10 @@ class Protocol(Enum):
 class EpisodicAsync:
     def __init__(
         self,
-        ctor: Callable[[], Env],
-        vector_size: int = 1,
-        time_limit: int = 1000,
-        action_repeat: int = 1,
+        ctor,
+        vector_size=1,
+        time_limit=1000,
+        action_repeat=1,
     ):
         self.env_fn = cloudpickle.dumps(ctor)
         self.time_limit = time_limit
@@ -103,7 +101,7 @@ class EpisodicAsync:
 
     def step_async(self, actions):
         for parent, action in zip(self.parents, actions):
-            payload = "step", (action,), {}
+            payload = "step", (action,), {}  # type: ignore
             parent.send((Protocol.CALL, payload))
 
     def step_wait(self, **kwargs):
@@ -153,7 +151,7 @@ class EpisodicAsync:
         if seed is None:
             per_task_seed = [None] * self.num_envs
         elif isinstance(seed, int):
-            per_task_seed = [seed + i for i in range(self.num_envs)]
+            per_task_seed = [seed + i for i in range(self.num_envs)]  # type: ignore
         else:
             per_task_seed = seed
         assert isinstance(per_task_seed, list) and len(per_task_seed) == self.num_envs
@@ -183,10 +181,10 @@ class EpisodicAsync:
 def _worker(ctor, conn, time_limit, action_repeat):
     try:
         env = TimeLimit(cloudpickle.loads(ctor)(), time_limit)
-        env = RescaleAction(env, -1.0, 1.0)
+        env = RescaleAction(env, -1.0, 1.0)  # type: ignore
         env.action_space = Box(-1.0, 1.0, env.action_space.shape, np.float32)
-        env = ClipAction(env)
-        env = wrappers.ActionRepeat(env, action_repeat)
+        env = ClipAction(env)  # type: ignore
+        env = wrappers.ActionRepeat(env, action_repeat)  # type: ignore
         while True:
             try:
                 # Only block for short times to have keyboard exceptions be raised.

@@ -4,7 +4,8 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from smbrl.models import ParamsDistribution
+from smbrl.agents.models import ParamsDistribution
+from smbrl.utils import ensemble_predict
 
 
 def meta_train(
@@ -23,7 +24,7 @@ def meta_train(
         hyper_posterior, opt_state = carry
         key = inputs
         key, next_key = jax.random.split(key)
-        ids = jax.random.choice(next_key, num_examples - 1)
+        ids = jax.random.choice(next_key, num_examples)
         meta_batch_x, meta_batch_y = jax.tree_map(lambda x: x[ids], data)
         # vmap to compute the grads for each svgd particle.
         mll_fn = jax.vmap(
@@ -63,7 +64,7 @@ def svgd(model, mll_fn, bandwidth, optimizer, opt_state, *, key=None):
     # Compute the particles' kernel matrix and its per-particle gradients.
     particles_matrix, reconstruct_tree = _to_matrix(model, num_particles)
     kxx, kernel_vjp = jax.vjp(
-        lambda x: rbf_kernel(x, particles_matrix, bandwidth), particles_matrix
+        lambda x: rbf_kernel(x, particles_matrix, bandwidth), particles_matrix  # type: ignore # noqa E501
     )
     # Summing along the 'particles axis' to compute the per-particle gradients, see
     # https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
@@ -77,7 +78,7 @@ def svgd(model, mll_fn, bandwidth, optimizer, opt_state, *, key=None):
 
 
 def _to_matrix(params, num_particles):
-    flattened_params, reconstruct_tree = jax.flatten_util.ravel_pytree(params)
+    flattened_params, reconstruct_tree = jax.flatten_util.ravel_pytree(params)  # type: ignore # noqa E501
     matrix = flattened_params.reshape((num_particles, -1))
     return matrix, reconstruct_tree
 
@@ -95,7 +96,7 @@ def meta_mll(
         prior_samples = jax.vmap(hyper_posterior_particle.sample)(
             jnp.asarray(jax.random.split(key, n_prior_samples))
         )
-        y_hat, stddevs = predict(prior_samples, x)
+        y_hat, stddevs = ensemble_predict(prior_samples)(x)
         log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(
             y[None]
         )
@@ -139,12 +140,11 @@ def mll(batch_x, batch_y, model, prior, prior_weight):
 
 
 def infer_posterior(
-    x,
-    y,
+    data,
     hyper_posterior,
-    update_steps,
-    learning_rate,
+    iterations,
     n_prior_samples,
+    learning_rate,
     key,
     prior_weight=1e-7,
     bandwidth=10.0,
@@ -157,32 +157,28 @@ def infer_posterior(
     prior = jax.tree_map(lambda x: x.mean(0), hyper_posterior)
     optimizer = optax.flatten(optax.adam(learning_rate))
     opt_state = optimizer.init(models)
-    mll_grads = jax.value_and_grad(lambda model: mll(x, y, model, prior, prior_weight))
-    # vmap mll over svgd particles.
-    mll_fn = jax.vmap(mll_grads)
+    num_examples = data[0].shape[0]
 
-    def update(carry, _):
+    def update(carry, inputs):
         model, opt_state = carry
+        key = inputs
+        key, next_key = jax.random.split(key)
+        ids = jax.random.choice(next_key, num_examples)
+        x, y = jax.tree_map(lambda x: x[ids], data)
+        mll_grads = jax.value_and_grad(
+            lambda model: mll(x, y, model, prior, prior_weight)
+        )
+        # vmap mll over svgd particles.
+        mll_fn = jax.vmap(mll_grads)
         model, opt_state, mll_value = svgd(
             model, mll_fn, bandwidth, optimizer, opt_state
         )
         return (model, opt_state), mll_value
 
     (posterior, _), mll_values = jax.lax.scan(
-        update, (models, opt_state), None, update_steps
+        update, (models, opt_state), jnp.asarray(jax.random.split(key, iterations))
     )
     return posterior, mll_values
-
-
-def predict(model, x):
-    # First vmap along the batch dimension.
-    ensemble_predict = lambda model, x: jax.vmap(model)(x)
-    # then vmap over members of the ensemble.
-    ensemble_predict = eqx.filter_vmap(
-        ensemble_predict, in_axes=(eqx.if_array(0), None)
-    )
-    y_hat, stddev = ensemble_predict(model, x)
-    return y_hat, stddev
 
 
 def make_hyper_prior(model):
@@ -198,7 +194,7 @@ def make_hyper_prior(model):
     return hyper_prior
 
 
-def make_hyper_posterior(make_model, key, n_particles, stddev=1e-7):
+def make_hyper_posterior(make_model, key, n_particles, stddev=0.1):
     particle_fn = lambda key: make_hyper_posterior_particle(make_model, key, stddev)
     return jax.vmap(particle_fn)(jnp.asarray(jax.random.split(key, n_particles)))
 
@@ -206,7 +202,7 @@ def make_hyper_posterior(make_model, key, n_particles, stddev=1e-7):
 def make_hyper_posterior_particle(make_model, key, stddev=1e-7):
     stddev_scale = jnp.log(stddev)
     particle_mus = make_model(key)
-    mus_empirical_stddev = jax.flatten_util.ravel_pytree(particle_mus)[0].std()
+    mus_empirical_stddev = jax.flatten_util.ravel_pytree(particle_mus)[0].std()  # type: ignore # noqa E501
     particle_stddevs = jax.tree_map(
         lambda x: jnp.ones_like(x) * jnp.log(mus_empirical_stddev * stddev + 1e-8),
         particle_mus,

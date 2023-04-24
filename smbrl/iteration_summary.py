@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 import numpy as np
 from numpy import typing as npt
@@ -26,12 +26,12 @@ class IterationSummary:
                 costs.append(c)
         # Stack data from all tasks on the first axis,
         # giving a [#tasks, #episodes, #time, ...] shape.
-        rewards = np.stack(rewards)
-        costs = np.stack(costs)
+        stacked_rewards = np.stack(rewards)
+        stacked_costs = np.stack(costs)
         return (
-            _objective(rewards),
-            _cost_rate(costs),
-            _feasibility(costs, self.cost_boundary),
+            _objective(stacked_rewards),
+            _cost_rate(stacked_costs),
+            _feasibility(stacked_costs, self.cost_boundary),
         )
 
     @property
@@ -39,20 +39,21 @@ class IterationSummary:
         all_vids = []
         for trajectory_batch in self._data:
             for trajectory in trajectory_batch:
-                all_vids.append(trajectory.frames)
+                if len(trajectory.frames) > 0:
+                    all_vids.append(trajectory.frames)
         return all_vids
 
-    def extend(self, samples: List[Trajectory]):
+    def extend(self, samples: List[Trajectory]) -> None:
         self._data.append(samples)
 
 
-def _objective(rewards: npt.NDArray[np.float32]) -> float:
-    return rewards.sum(2).mean()
+def _objective(rewards: npt.NDArray[Any]) -> float:
+    return float(rewards.sum(2).mean())
 
 
-def _cost_rate(costs: npt.NDArray[np.float32]) -> float:
-    return costs.mean()
+def _cost_rate(costs: npt.NDArray[Any]) -> float:
+    return float(costs.mean())
 
 
-def _feasibility(costs: npt.NDArray[np.float32], boundary) -> float:
-    return (costs.sum(2).mean(1) <= boundary).mean()
+def _feasibility(costs: npt.NDArray[Any], boundary: float) -> float:
+    return float((costs.sum(2).mean(1) <= boundary).mean())

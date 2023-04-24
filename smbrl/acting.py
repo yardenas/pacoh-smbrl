@@ -3,15 +3,15 @@ from typing import Any, Iterable
 import numpy as np
 from tqdm import tqdm
 
-from smbrl import utils
-from smbrl.episodic_async_env import EpisodicAsync
+from smbrl.episodic_async_env import EpisodicAsync  # type: ignore
 from smbrl.iteration_summary import IterationSummary
 from smbrl.logging import TrainingLogger
-from smbrl.smbrl import SMBRL
 from smbrl.trajectory import Trajectory, TrajectoryData, Transition
+from smbrl.types import Agent
+from smbrl.utils import grouper
 
 
-def log_results(trajectory: TrajectoryData, logger: TrainingLogger, step: int):
+def log_results(trajectory: TrajectoryData, logger: TrainingLogger, step: int) -> None:
     logger.log_summary(
         {
             "train/episode_reward_mean": float(trajectory.reward.sum(1).mean()),
@@ -22,12 +22,14 @@ def log_results(trajectory: TrajectoryData, logger: TrainingLogger, step: int):
 
 
 def interact(
-    agent: SMBRL,
+    agent: Agent,
     environment: EpisodicAsync,
     num_episodes: int,
+    adaptation_episodes: int,
     train: bool,
     render_episodes: int = 0,
-):
+) -> list[Trajectory]:
+    assert 0 <= adaptation_episodes <= num_episodes
     observations = environment.reset()
     episode_count = 0
     episodes: list[Trajectory] = []
@@ -52,27 +54,29 @@ def interact(
                 np_trajectory = trajectory.as_numpy()
                 if train:
                     agent.observe(np_trajectory)
-                agent.reset()
+                if episode_count < adaptation_episodes:
+                    agent.adapt(np_trajectory)
                 log_results(np_trajectory, agent.logger, agent.episodes)
                 render_episodes = max(render_episodes - 1, 0)
-                observations = environment.reset()
                 episodes.append(trajectory)
                 trajectory = Trajectory()
                 pbar.update(1)
                 episode_count += 1
+                observations = environment.reset()
     return episodes
 
 
 def epoch(
-    agent: SMBRL,
+    agent: Agent,
     env: EpisodicAsync,
     tasks: Iterable[Any],
     episodes_per_task: int,
+    adaptation_episodes: int,
     train: bool,
     render_episodes: int = 0,
 ) -> IterationSummary:
     summary = IterationSummary()
-    batches = list(utils.grouper(tasks, env.num_envs))
+    batches = list(grouper(tasks, env.num_envs))
     for batch in batches:
         assert len(batch) == env.num_envs
         env.reset(options={"task": batch})
@@ -80,8 +84,10 @@ def epoch(
             agent,
             env,
             episodes_per_task,
-            train=train,
-            render_episodes=render_episodes,
+            adaptation_episodes,
+            train,
+            render_episodes,
         )
+        agent.reset()
         summary.extend(samples)
     return summary

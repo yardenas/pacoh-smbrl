@@ -3,9 +3,12 @@ from typing import Any
 
 import equinox as eqx
 import jax
+import jax.nn as jnn
 import jax.numpy as jnp
 import optax
 from jaxtyping import PyTree
+
+from smbrl.trajectory import TrajectoryData
 
 
 class Learner:
@@ -39,8 +42,8 @@ def all_finite(tree):
     if not leaves:
         return jnp.array(True)
     else:
-        leaves = map(jnp.isfinite, leaves)
-        leaves = map(jnp.all, leaves)
+        leaves = list(map(jnp.isfinite, leaves))
+        leaves = list(map(jnp.all, leaves))
         return jnp.stack(list(leaves)).all()
 
 
@@ -64,3 +67,69 @@ def grouper(iterable, n, *, incomplete="fill", fillvalue=None):
 
 def inv_softplus(x):
     return jnp.where(x < 20.0, jnp.log(jnp.exp(x) - 1.0), x)
+
+
+def clip_stddev(stddev, stddev_min, stddev_max, stddev_scale=1.0):
+    stddev = jnp.clip(
+        (stddev + inv_softplus(0.1)) * stddev_scale,
+        inv_softplus(stddev_min),
+        inv_softplus(stddev_max),
+    )
+    return jnn.softplus(stddev)
+
+
+class PRNGSequence:
+    def __init__(self, seed: int):
+        self.key = jax.random.PRNGKey(seed)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self.key, subkey = jax.random.split(self.key)
+        return subkey
+
+    def take_n(self, n):
+        keys = jax.random.split(self.key, n + 1)
+        self.key = keys[0]
+        return keys[1:]
+
+
+def add_to_buffer(buffer, trajectory, normalizer, reward_scale):
+    results = normalizer.result
+    normalize_fn = lambda x: normalize(x, results.mean, results.std)
+    buffer.add(
+        TrajectoryData(
+            normalize_fn(trajectory.observation),
+            normalize_fn(trajectory.next_observation),
+            trajectory.action,
+            trajectory.reward * reward_scale,
+            trajectory.cost,
+        )
+    )
+
+
+def normalize(
+    observation,
+    mean,
+    std,
+):
+    diff = observation - mean
+    return diff / (std + 1e-8)
+
+
+def ensemble_predict(fn, in_axes=0):
+    """
+    A decorator that wraps (parameterized-)functions such that if they define
+    an ensemble, predictions are made for each member of the ensemble individually.
+    """
+
+    def vmap_ensemble(*args, **kwargs):
+        # First vmap along the batch dimension.
+        ensemble_predict = lambda fn: jax.vmap(fn, in_axes=in_axes)(*args, **kwargs)
+        # then vmap over members of the ensemble, such that each
+        # individually computes outputs.
+        ensemble_predict = eqx.filter_vmap(ensemble_predict)
+        return ensemble_predict(fn)
+
+    return vmap_ensemble

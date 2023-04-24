@@ -1,3 +1,4 @@
+# type: ignore
 from typing import Iterator, Tuple
 
 import equinox as eqx
@@ -7,8 +8,8 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-import smbrl.pacoh_nn as pacoh
-from smbrl.utils import inv_softplus
+import smbrl.agents.pacoh_nn as pacoh
+from smbrl.utils import clip_stddev
 
 
 class SinusoidRegression:
@@ -80,16 +81,7 @@ class Homoscedastic(eqx.Module):
     def __call__(self, x: jax.Array) -> jax.Array:
         for layer in self.layers:
             x = jnn.relu(layer(x))
-        return self.mu(x), _clip_stddev(self.stddev, 0.5, 1.0)
-
-
-def _clip_stddev(stddev, stddev_min, stddev_max, stddev_scale=1.0):
-    stddev = jnp.clip(
-        (stddev + inv_softplus(0.1)) * stddev_scale,
-        inv_softplus(stddev_min),
-        inv_softplus(stddev_max),
-    )
-    return jnn.softplus(stddev)
+        return self.mu(x), clip_stddev(self.stddev, 0.5, 1.0)
 
 
 def sample_data(data_generating_process, num_tasks):
@@ -97,6 +89,10 @@ def sample_data(data_generating_process, num_tasks):
     for _ in range(num_tasks):
         out.append(next(data_generating_process.train_set))
     return tuple(map(np.stack, zip(*out)))
+
+
+def predict(model, x):
+    return pacoh.ensemble_predict(model)(x)
 
 
 def infer_posterior(
@@ -131,7 +127,7 @@ def infer_posterior(
 def test_svgd():
     import matplotlib.pyplot as plt
 
-    from smbrl.models import ParamsDistribution
+    from smbrl.agents.models import ParamsDistribution
 
     data_generating_process = SinusoidRegression(16, 5, 5)
     test_iter = iter(data_generating_process.test_set)
@@ -148,7 +144,7 @@ def test_svgd():
         posterior = infer_posterior(
             context_x[i], context_y[i], ensemble, prior, 500, 1e-3, 0.001, 1000
         )
-        predictions = pacoh.predict(posterior, test_x[i])
+        predictions = predict(posterior, test_x[i])
         mu, _ = predictions
         axes[i].plot(
             np.tile(test_x[i], (mu.shape[0], 1, 1)).squeeze(-1).T,
@@ -207,12 +203,12 @@ def test_training():
     (context_x, context_y), (test_x, test_y) = next(data_generating_process.test_set)
     key, key_next = jax.random.split(key)
     infer_posteriors = lambda x, y: pacoh.infer_posterior(
-        x, y, hyper_posterior, 500, 3e-4, 5, key_next, 1e-7, 1000
+        (x, y), hyper_posterior, 500, 5, 3e-4, key_next, 1e-7, 1000
     )
-    infer_posteriors = jax.jit(jax.vmap(infer_posteriors))
-    posteriors, losses = infer_posteriors(context_x, context_y)
-    predict = jax.vmap(pacoh.predict)
-    predictions = predict(posteriors, test_x)
+    infer_posteriors = jax.jit(jax.vmap(infer_posteriors, 1))
+    posteriors, _ = infer_posteriors(context_x[None], context_y[None])
+    predict_tasks = jax.vmap(predict)
+    predictions = predict_tasks(posteriors, test_x)
     plot(context_x, context_y, test_x, test_y, predictions)
 
 
@@ -220,7 +216,7 @@ def plot_prior(x, y, priors):
     import matplotlib.pyplot as plt
 
     x_pred = np.linspace(-4.0, 4.0, 1000)[:, None]
-    predictions = pacoh.predict(priors, x_pred)
+    predictions = predict(priors, x_pred)
     x = x.reshape(-1, 1)
     y = y.reshape(-1, 1)
     mu, _ = predictions
@@ -246,20 +242,21 @@ def plot(x, y, x_tst, y_tst, yhats):
     for task in range(6):
         plt.subplot(2, 3, task + 1)
         avgm = np.zeros_like(x_tst[task, :, 0])
-        for i, (mu, stddev) in enumerate(zip(mus[task], stddevs[task])):
+        for i, (mu, _) in enumerate(zip(mus[task], stddevs[task])):
             m = np.squeeze(mu)
             if i < 15:
                 plt.plot(
                     x_tst[task],
                     m,
-                    "r",
                     label="ensemble means" if i == 0 else None,
+                    color="green",
+                    alpha=0.3,
                     linewidth=1.0,
                 )
             avgm += m
         avgm = avgm / (i + 1)
         epistemic = mus[task].std(0).squeeze(-1)
-        plt.plot(x_tst[task], avgm, "r", label="overall mean", linewidth=4)
+        plt.plot(x_tst[task], avgm, "g", alpha=0.3, label="overall mean", linewidth=4)
         plt.fill_between(
             x_tst[task].squeeze(1),
             avgm - 3 * epistemic,
