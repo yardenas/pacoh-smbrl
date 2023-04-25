@@ -120,8 +120,8 @@ def test_model_learning(agent, pred_fn_factory, overrides):
         trainer.train(epochs=3)
     agent = trainer.agent
     assert agent is not None
-    trainer.env.reset(options={"task": list(trainer.tasks(True))})
-    summary = acting.interact(agent, trainer.env, 1, 1, True)
+    trainer.env.reset(options={"task": list(trainer.tasks(False))})
+    summary = acting.interact(agent, trainer.env, 1, 1, False)
     trajectories = summary[0].as_numpy()
     normalize_fn = lambda x: normalize(
         x, agent.obs_normalizer.result.mean, agent.obs_normalizer.result.std
