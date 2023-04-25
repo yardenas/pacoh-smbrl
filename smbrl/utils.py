@@ -140,11 +140,13 @@ def fix_task_sampling(sampler: TaskSampler, num_tasks: int) -> TaskSampler:
     """
     Takes a task sampler and makes sure that the same tasks are being sampled.
     """
-    train_tasks = iter(cycle(sampler(num_tasks, True)))
-    test_tasks = iter(cycle(sampler(num_tasks, False)))
+    train_tasks = cycle(list(sampler(num_tasks, True)))
+    test_tasks = cycle(list(sampler(num_tasks, False)))
 
     def sample(batch_size: int, train: Optional[bool] = False) -> Iterable[Any]:
+        train_tasks_it = iter(train_tasks)
+        test_tasks_it = iter(test_tasks)
         for _ in range(batch_size):
-            yield next(train_tasks) if train else next(test_tasks)
+            yield next(train_tasks_it) if train else next(test_tasks_it)
 
     return sample
