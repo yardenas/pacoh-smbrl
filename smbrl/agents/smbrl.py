@@ -1,3 +1,5 @@
+import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 from gymnasium import spaces
@@ -13,6 +15,23 @@ from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import FloatArray
 from smbrl.utils import Learner, add_to_buffer, normalize
+
+
+@eqx.filter_jit
+def policy(
+    observation: jax.Array,
+    model: Model,
+    horizon: int,
+    init_guess: jax.Array,
+    key: jax.random.KeyArray,
+    cem_config: cem.CEMConfig,
+):
+    # vmap over batches of observations (e.g., solve cem separately for
+    # each individual environment)
+    cem_per_env = jax.vmap(
+        lambda o: cem.policy(o, model.sample, horizon, init_guess, key, cem_config)
+    )
+    return cem_per_env(observation)
 
 
 class SMBRL(AgentBase):
@@ -61,9 +80,9 @@ class SMBRL(AgentBase):
         )
         horizon = self.config.agents.smbrl.plan_horizon
         init_guess = jnp.zeros((horizon, self.replay_buffer.action.shape[-1]))
-        action = cem.policy(
+        action = policy(
             normalized_obs,
-            self.model.sample,
+            self.model,
             horizon,
             init_guess,
             next(self.prng),

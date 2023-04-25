@@ -1,6 +1,5 @@
 from typing import Callable, TypedDict
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 
@@ -71,7 +70,6 @@ class CEMConfig(TypedDict):
     initial_stddev: float
 
 
-@eqx.filter_jit
 def policy(
     observation: jax.Array,
     rollout_fn: RolloutFn,
@@ -80,16 +78,11 @@ def policy(
     key: jax.random.KeyArray,
     cem_config: CEMConfig,
 ) -> jax.Array:
-    def batched_solve(observation):
-        n_key, _ = jax.random.split(key)
-        objective = make_objective(rollout_fn, horizon, observation, n_key)
-        action = solve(
-            objective,
-            init_guess,
-            key,
-            **cem_config,
-        )[0]
-        return action
-
-    actions: jax.Array = jax.vmap(batched_solve)(observation)
-    return actions
+    objective = make_objective(rollout_fn, horizon, observation, key)
+    action = solve(
+        objective,
+        init_guess,
+        key,
+        **cem_config,
+    )[0]
+    return action

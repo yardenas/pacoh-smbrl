@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Optional
 
 import equinox as eqx
 import jax
@@ -55,25 +55,39 @@ def policy(
     key: jax.random.KeyArray,
     cem_config: cem.CEMConfig,
 ):
-    def sample(m, h, o, k, a):
-        return ensemble_predict(m.sample, (None, 0, None, 0))(
+    def sample_per_task(model):
+        # We get an ensemble of models which are specialized for a specific task.
+        # 1. Use each member of the ensemble to make predictions.
+        # 2. Average over these predictions to (approximately) marginalize
+        #    over posterior parameters.
+        ensemble_sample = lambda m, h, o, k, a: ensemble_predict(
+            m.sample, (None, 0, None, 0)
+        )(
             h,
             o[None],
             k,
             a[None],
         )
+        return lambda h, o, k, a: jax.tree_map(
+            lambda x: x.squeeze(1).mean(0), ensemble_sample(model, h, o, k, a)
+        )
 
-    partial_sample = lambda h, o, k, a: sample(model, h, o, k, a)
-    mean_sample = lambda h, o, k, a: jax.tree_map(
-        lambda x: x.squeeze(1).mean(0), partial_sample(h, o, k, a)
+    if model.state_decoder.bias.ndim == 3:
+        # If we actually got an ensemble of models per task, vmap over the
+        # tasks to solve cem with each model for each task separately.
+        in_axes: tuple[Optional[int], int] = (0, 0)
+    else:
+        # Otherwise, just use a single ensemble for all tasks
+        in_axes = (None, 0)
+    cem_per_env = jax.vmap(
+        lambda m, o: cem.policy(
+            o, sample_per_task(m), horizon, init_guess, key, cem_config
+        ),
+        in_axes,
     )
-    action = cem.policy(
+    action = cem_per_env(
+        model,
         observation,
-        mean_sample,
-        horizon,
-        init_guess,
-        key,
-        cem_config,
     )
     return action
 
