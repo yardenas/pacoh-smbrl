@@ -186,4 +186,6 @@ def plot(y, y_hat, context):
         ax.spines["right"].set_visible(False)
         ax.axvline(context, color="k", linestyle="--", linewidth=1.0)
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
+    plt.pause(5)
+    plt.close()

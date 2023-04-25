@@ -169,7 +169,9 @@ def test_svgd():
         axes[i].set_xlabel("x")
         axes[i].set_xlabel("y")
         axes[i].set_ylim(-3, 3)
-    plt.show()
+    plt.show(block=False)
+    plt.pause(5)
+    plt.close()
 
 
 def test_training():
@@ -231,7 +233,9 @@ def plot_prior(x, y, priors):
         linewidth=1.0,
     )
     ax.set_ylim(-2, 2)
-    plt.show()
+    plt.show(block=False)
+    plt.pause(5)
+    plt.close()
 
 
 def plot(x, y, x_tst, y_tst, yhats):
@@ -271,4 +275,6 @@ def plot(x, y, x_tst, y_tst, yhats):
         ax.spines["left"].set_position(("data", 0))
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-    plt.show()
+    plt.show(block=False)
+    plt.pause(5)
+    plt.close()
