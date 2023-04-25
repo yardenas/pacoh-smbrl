@@ -33,3 +33,4 @@ training:
   parallel_envs: 20
   task_batch_size: 20
   scale_reward: 1.
+  num_tasks: 5

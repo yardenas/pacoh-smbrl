@@ -1,5 +1,5 @@
-from itertools import zip_longest
-from typing import Any
+from itertools import cycle, zip_longest
+from typing import Any, Iterable, Optional
 
 import equinox as eqx
 import jax
@@ -9,6 +9,7 @@ import optax
 from jaxtyping import PyTree
 
 from smbrl.trajectory import TrajectoryData
+from smbrl.types import TaskSampler
 
 
 class Learner:
@@ -133,3 +134,17 @@ def ensemble_predict(fn, in_axes=0):
         return ensemble_predict(fn)
 
     return vmap_ensemble
+
+
+def fix_task_sampling(sampler: TaskSampler, num_tasks: int) -> TaskSampler:
+    """
+    Takes a task sampler and makes sure that the same tasks are being sampled.
+    """
+    train_tasks = iter(cycle(sampler(num_tasks, True)))
+    test_tasks = iter(cycle(sampler(num_tasks, False)))
+
+    def sample(batch_size: int, train: Optional[bool] = False) -> Iterable[Any]:
+        for _ in range(batch_size):
+            yield next(train_tasks) if train else next(test_tasks)
+
+    return sample
