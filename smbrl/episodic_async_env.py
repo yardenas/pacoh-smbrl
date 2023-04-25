@@ -181,9 +181,10 @@ class EpisodicAsync:
 def _worker(ctor, conn, time_limit, action_repeat):
     try:
         env = TimeLimit(cloudpickle.loads(ctor)(), time_limit)
-        env = RescaleAction(env, -1.0, 1.0)  # type: ignore
-        env.action_space = Box(-1.0, 1.0, env.action_space.shape, np.float32)
-        env = ClipAction(env)  # type: ignore
+        if isinstance(env.action_space, Box):
+            env = RescaleAction(env, -1.0, 1.0)  # type: ignore
+            env.action_space = Box(-1.0, 1.0, env.action_space.shape, np.float32)
+            env = ClipAction(env)  # type: ignore
         env = wrappers.ActionRepeat(env, action_repeat)  # type: ignore
         while True:
             try:

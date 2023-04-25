@@ -11,14 +11,19 @@ from smbrl.types import Agent
 from smbrl.utils import grouper
 
 
-def log_results(trajectory: TrajectoryData, logger: TrainingLogger, step: int) -> None:
+def log_results(
+    trajectory: TrajectoryData, logger: TrainingLogger, step: int
+) -> tuple[float, float]:
+    reward = float(trajectory.reward.sum(1).mean())
+    cost = float(trajectory.cost.sum(1).mean())
     logger.log_summary(
         {
-            "train/episode_reward_mean": float(trajectory.reward.sum(1).mean()),
-            "train/episode_cost_mean": float(trajectory.cost.sum(1).mean()),
+            "train/episode_reward_mean": reward,
+            "train/episode_cost_mean": cost,
         },
         step,
     )
+    return reward, cost
 
 
 def interact(
@@ -34,7 +39,10 @@ def interact(
     episode_count = 0
     episodes: list[Trajectory] = []
     trajectory = Trajectory()
-    with tqdm(total=num_episodes) as pbar:
+    with tqdm(
+        total=num_episodes,
+        unit=f"Episode (✖️{environment.num_envs} parallel)",
+    ) as pbar:
         while episode_count < num_episodes:
             if render_episodes:
                 trajectory.frames.append(environment.render())
@@ -56,7 +64,8 @@ def interact(
                     agent.observe(np_trajectory)
                 if episode_count < adaptation_episodes:
                     agent.adapt(np_trajectory)
-                log_results(np_trajectory, agent.logger, agent.episodes)
+                reward, cost = log_results(np_trajectory, agent.logger, agent.episodes)
+                pbar.set_postfix({"reward": reward, "cost": cost})
                 render_episodes = max(render_episodes - 1, 0)
                 episodes.append(trajectory)
                 trajectory = Trajectory()

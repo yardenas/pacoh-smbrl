@@ -1,4 +1,4 @@
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator
 
 import numpy as np
 from tensorflow import data as tfd
@@ -20,7 +20,7 @@ class ReplayBuffer:
         sequence_length: int,
         precision: int,
     ):
-        self.task_id = 0
+        self.task_count = 0
         self.dtype = {16: np.float16, 32: np.float32}[precision]
         self.observation = np.zeros(
             (
@@ -56,11 +56,10 @@ class ReplayBuffer:
             ),
             dtype=self.dtype,
         )
-        self.valid_tasks = 0
-        self.episode_id = 0
+        self.episode_ids = np.zeros((capacity,), dtype=np.int32)
         self.rs = np.random.RandomState(seed)
         example = next(
-            iter(self._sample_batch(batch_size, sequence_length, num_shots, capacity))
+            iter(self._sample_batch(batch_size, sequence_length, num_shots, False))
         )
         self._generator = lambda: self._sample_batch(
             batch_size, sequence_length, num_shots
@@ -71,43 +70,47 @@ class ReplayBuffer:
     def num_episodes(self):
         return self.cost.shape[1]
 
+    @property
+    def task_id(self):
+        return self.task_count % self.cost.shape[0]
+
     def add(self, trajectory: TrajectoryData) -> None:
         capacity, *_ = self.reward.shape
         batch_size = min(trajectory.observation.shape[0], capacity)
         # Discard data if batch size overflows capacity.
         end = min(self.task_id + batch_size, capacity)
         task_slice = slice(self.task_id, end)
-        for data, val in zip(
-            (self.action, self.reward, self.cost),
-            (trajectory.action, trajectory.reward, trajectory.cost),
-        ):
-            data[task_slice, self.episode_id] = val[:batch_size].astype(self.dtype)
+        current_episode = self.episode_ids[self.task_id] % self.num_episodes
         observation = np.concatenate(
             [
                 trajectory.observation[:batch_size],
                 trajectory.next_observation[:batch_size, -1:],
             ],
             axis=1,
-        ).astype(self.dtype)
-        self.observation[task_slice, self.episode_id] = observation
-        self.episode_id += 1
-        if self.episode_id == self.num_episodes:
-            self.task_id = (self.task_id + batch_size) % capacity
-            self.valid_tasks = min(self.valid_tasks + batch_size, capacity)
-            self.episode_id = 0
+        )
+        for data, val in zip(
+            (self.observation, self.action, self.reward, self.cost),
+            (observation, trajectory.action, trajectory.reward, trajectory.cost),
+        ):
+            data[task_slice, current_episode] = val[:batch_size].astype(self.dtype)
+        current_episode += 1
+        self.episode_ids[task_slice] = current_episode
+        if current_episode == self.num_episodes:
+            self.task_count += batch_size
 
     def _sample_batch(
-        self,
-        batch_size: int,
-        sequence_length: int,
-        num_shots: int,
-        valid_tasks: Optional[int] = None,
+        self, batch_size: int, sequence_length: int, num_shots: int, strict=True
     ) -> Iterator[tuple[Any, ...]]:
-        if valid_tasks is not None:
-            valid_tasks = valid_tasks
+        capacity, num_episodes, time_limit = self.observation.shape[0:3]
+        if strict:
+            if self.task_count <= capacity:
+                # Finds first occurence of episodes with episode_id == 0.
+                # See documentation of np.argmax(). Use only one task if buffer is empty.
+                valid_tasks = max((self.episode_ids == 0).argmax(), 1)
+            else:
+                valid_tasks = capacity
         else:
-            valid_tasks = self.valid_tasks
-        num_episodes, time_limit = self.observation.shape[1:3]
+            valid_tasks = self.observation.shape[0]
         assert time_limit > sequence_length and num_episodes >= num_shots
         while True:
             timestep_ids = _make_ids(
@@ -117,21 +120,22 @@ class ReplayBuffer:
                 batch_size,
                 (0, 1),
             )
-            episode_ids = _make_ids(
-                self.rs, self.episode_id + 2 - num_shots, num_shots, batch_size, (0, 2)
-            )
             task_ids = self.rs.choice(valid_tasks, size=batch_size)
+            highs = (
+                self.episode_ids[task_ids]
+                if strict
+                else np.ones((batch_size,), dtype=np.int32) * num_episodes
+            )
+            episode_ids = self.rs.randint(0, highs, size=(batch_size, num_shots, 1))
             # Sample a sequence of length H for the actions, rewards and costs,
             # and a length of H + 1 for the observations (which is needed for
             # value-function bootstrapping)
-            a, r, c = [
-                x[task_ids[:, None, None], episode_ids, timestep_ids[..., :-1]]
-                for x in (
-                    self.action,
-                    self.reward,
-                    self.cost,
-                )
+            take = lambda x: x[
+                task_ids[:, None, None], episode_ids, timestep_ids[..., :-1]
             ]
+            a = take(self.action)
+            r = take(self.reward)
+            c = take(self.cost)
             obs_sequence = self.observation[
                 task_ids[:, None, None], episode_ids, timestep_ids
             ]
@@ -140,8 +144,6 @@ class ReplayBuffer:
             yield o, next_o, a, r, c
 
     def sample(self, n_batches: int) -> Iterator[TrajectoryData]:
-        if self.empty:
-            return
         for batch in self._dataset.take(n_batches):
             yield TrajectoryData(*map(lambda x: x.numpy(), batch))  # type: ignore
 
@@ -209,16 +211,8 @@ class OnPolicyReplayBuffer(ReplayBuffer):
         assert num_shots == num_episodes
 
     def _sample_batch(
-        self,
-        batch_size: int,
-        sequence_length: int,
-        num_shots: int,
-        valid_tasks: Optional[int] = None,
+        self, batch_size: int, sequence_length: int, num_shots: int, strict=True
     ) -> Iterator[tuple[Any, ...]]:
-        if valid_tasks is not None:
-            valid_tasks = valid_tasks
-        else:
-            valid_tasks = self.valid_tasks
         num_episodes, time_limit = self.observation.shape[1:3]
         assert time_limit > sequence_length and num_episodes >= num_shots
         while True:
@@ -229,17 +223,16 @@ class OnPolicyReplayBuffer(ReplayBuffer):
                 batch_size,
                 (0,),
             )
-            episode_ids = _make_ids(
-                self.rs, self.episode_id + 2 - num_shots, num_shots, batch_size, (1,)
+            highs = (
+                self.episode_ids
+                if strict
+                else np.ones((batch_size,), dtype=np.int32) * num_episodes
             )
-            a, r, c = [
-                x[:, episode_ids, timestep_ids[..., :-1]]
-                for x in (
-                    self.action,
-                    self.reward,
-                    self.cost,
-                )
-            ]
+            episode_ids = self.rs.randint(0, highs, size=(batch_size, num_shots))
+            take = lambda x: x[:, episode_ids, timestep_ids[..., :-1]]
+            a = take(self.action)
+            r = take(self.reward)
+            c = take(self.cost)
             obs_sequence = self.observation[:, episode_ids, timestep_ids]
             o = obs_sequence[:, :, :-1]
             next_o = obs_sequence[:, :, 1:]

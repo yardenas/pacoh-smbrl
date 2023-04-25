@@ -1,22 +1,20 @@
 import os
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 import cloudpickle
 import numpy as np
-from gymnasium import Env
-from gymnasium.spaces import Box
 from omegaconf import DictConfig
 
 from smbrl import acting, agents, episodic_async_env, logging, utils
-from smbrl.types import Agent, TaskSamplerFactory
+from smbrl.types import Agent, EnvironmentFactory, TaskSampler
 
 
 class Trainer:
     def __init__(
         self,
         config: DictConfig,
-        make_env: Callable[[], Env[Box, Box]],
-        task_sampler: TaskSamplerFactory,
+        make_env: EnvironmentFactory,
+        task_sampler: TaskSampler,
         agent: Optional[Agent] = None,
         start_epoch: int = 0,
         seeds: Optional[List[int]] = None,
@@ -35,10 +33,10 @@ class Trainer:
 
     def __enter__(self):
         if self.namespace is not None:
-            log_path = f"{self.config.training.log_dir}/{self.namespace}"
+            log_path = f"{self.config.log_dir}/{self.namespace}"
         else:
-            log_path = self.config.training.log_dir
-        self.logger = logging.TrainingLogger(self.config.training.log_dir)
+            log_path = self.config.log_dir
+        self.logger = logging.TrainingLogger(self.config.log_dir)
         self.state_writer = logging.StateWriter(log_path)
         self.env = episodic_async_env.EpisodicAsync(
             self.make_env,
@@ -105,7 +103,7 @@ class Trainer:
             episodes_per_task,
             adaptation_episodes,
             train,
-            render_episodes=render_episodes,
+            render_episodes,
         )
         step = (
             epoch
@@ -153,9 +151,9 @@ class Trainer:
         cls, config: DictConfig, namespace: Optional[str] = None
     ) -> "Trainer":
         if namespace is not None:
-            log_path = f"{config.training.log_dir}/{namespace}"
+            log_path = f"{config.log_dir}/{namespace}"
         else:
-            log_path = config.training.log_dir
+            log_path = config.log_dir
         with open(os.path.join(log_path, "state.pkl"), "rb") as f:
             make_env, env_rs, agent, epoch, task_sampler = cloudpickle.load(f).values()
         print(f"Resuming experiment from: {log_path}...")

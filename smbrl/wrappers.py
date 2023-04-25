@@ -1,4 +1,3 @@
-# type: ignore
 from gymnasium.core import Wrapper
 
 

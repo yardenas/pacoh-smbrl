@@ -1,12 +1,27 @@
 defaults:
+  - _self_
   - agents: smbrl
+  - tasks: pendulum
+
+hydra:
+  run:
+    dir: ${log_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}/
+  sweep:
+    dir: ${log_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}/
+    subdir: ${hydra.job.override_dirname}
+  job:
+    config:
+      override_dirname:
+        exclude_keys:
+          - log_dir
+
+log_dir: output
 
 training:
   safe: True
   cost_limit: 25
-  log_dir: results
   seed: 0
-  time_limit: 1000
+  time_limit: 200
   episodes_per_task: 10
   eval_episodes_per_task: 10
   adaptation_budget: 1
@@ -14,8 +29,6 @@ training:
   eval_every: 5
   action_repeat: 1
   render_episodes: 1
-  render_options: { camera_id: "fixedfar" }
-  jit: True
   precision: 32
   parallel_envs: 20
   task_batch_size: 20

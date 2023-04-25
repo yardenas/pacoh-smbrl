@@ -12,6 +12,8 @@ from typing import (
 import jax
 import numpy as np
 import optax
+from gymnasium import Env
+from gymnasium.spaces import Box, Discrete
 from jaxtyping import PyTree
 from numpy import typing as npt
 from omegaconf import DictConfig
@@ -24,6 +26,14 @@ if TYPE_CHECKING:
 Data = tuple[jax.Array, jax.Array]
 
 FloatArray = npt.NDArray[Union[np.float32, np.float64]]
+
+TaskSampler = Callable[[int, Optional[bool]], Iterable[Any]]
+
+EnvironmentFactory = Callable[[], Union[Env[Box, Box], Env[Box, Discrete]]]
+
+MetaEnvironmentFactory = tuple[EnvironmentFactory, TaskSampler]
+
+ModelUpdate = tuple[tuple[PyTree, optax.OptState], jax.Array]
 
 
 class Agent(Protocol):
@@ -51,9 +61,5 @@ class Prediction(NamedTuple):
     next_state_stddev: jax.Array
     reward_stddev: jax.Array
 
-
-TaskSamplerFactory = Callable[[int, Optional[bool]], Iterable[Any]]
-
-ModelUpdate = tuple[tuple[PyTree, optax.OptState], jax.Array]
 
 RolloutFn = Callable[[int, jax.Array, jax.random.KeyArray, jax.Array], Prediction]

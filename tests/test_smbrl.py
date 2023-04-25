@@ -1,13 +1,12 @@
 # type: ignore
 import importlib
-from typing import Iterable, Optional
 
 import jax
 import numpy as np
 import pytest
 from hydra import compose, initialize
 
-from smbrl import acting
+from smbrl import acting, tasks
 from smbrl.trainer import Trainer
 from smbrl.trajectory import TrajectoryData
 from smbrl.utils import ensemble_predict, normalize
@@ -30,37 +29,12 @@ def test_training(agent):
                 f"agents.{agent}.model.hidden_size=32",
                 f"agents.{agent}.update_steps=1",
                 f"agents.{agent}.replay_buffer.sequence_length=16",
+                f"agents.{agent}.replay_buffer.num_shots=1",
             ],
         )
-    sampler = lambda *args, **kwargs: task_sampler(cfg, *args, **kwargs)
-    env = lambda: make_env(cfg)
-    with Trainer(cfg, env, sampler) as trainer:
+    make_env, task_sampler = tasks.make(cfg)
+    with Trainer(cfg, make_env, task_sampler) as trainer:
         trainer.train(epochs=1)
-
-
-def make_env(cfg):
-    import gymnasium
-
-    from smbrl.tasks import GravityPendulum, alter_gravity
-    from smbrl.wrappers import MetaEnv
-
-    env = gymnasium.make("Pendulum-v1", render_mode="rgb_array")
-    env._max_episode_steps = cfg.training.time_limit
-    env = GravityPendulum(env)
-    env = MetaEnv(env, alter_gravity)
-    return env
-
-
-def task_sampler(cfg, batch_size: int, train: Optional[bool] = False) -> Iterable[int]:
-    rs = np.random.RandomState(cfg.training.seed)
-    train_tasks = rs.uniform(-np.pi, np.pi, batch_size)
-    test_tasks = rs.uniform(-np.pi, np.pi, batch_size)
-    if train:
-        for task in train_tasks:
-            yield task
-    else:
-        for task in test_tasks:
-            yield task
 
 
 def smbrl_predictions(agent, horizon):
@@ -103,6 +77,7 @@ COMMON = [
 
 SMBRL_CFG = [
     "agents.smbrl.replay_buffer.sequence_length=30",
+    "agents.smbrl.replay_buffer.num_shots=1",
 ] + COMMON
 
 ASMBRL_CFG = [
@@ -114,6 +89,7 @@ ASMBRL_CFG = [
     "agents.asmbrl.pacoh.prior_weight=0.",
     "agents.asmbrl.update_steps=100",
     "agents.asmbrl.posterior.update_steps=100",
+    "agents.asmbrl.replay_buffer.num_shots=1",
 ] + COMMON
 
 
@@ -128,9 +104,8 @@ ASMBRL_CFG = [
 def test_model_learning(agent, pred_fn_factory, overrides):
     with initialize(version_base=None, config_path="../smbrl/"):
         cfg = compose(config_name="config", overrides=overrides)
-    sampler = lambda *args, **kwargs: task_sampler(cfg, *args, **kwargs)
-    env = lambda: make_env(cfg)
-    with Trainer(cfg, env, sampler) as trainer:
+    make_env, task_sampler = tasks.make(cfg)
+    with Trainer(cfg, make_env, task_sampler) as trainer:
         assert trainer.agent is not None and trainer.env is not None
         agent_module = importlib.import_module(f"smbrl.agents.{agent}")
         agent_class = getattr(agent_module, agent.upper())
