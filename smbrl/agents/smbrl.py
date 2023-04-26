@@ -105,7 +105,6 @@ class SMBRL(AgentBase):
             self.config.training.scale_reward,
         )
         self.update_model()
-        self.episodes += 1
 
     def update_model(self):
         x, y = ml.prepare_data(
@@ -119,4 +118,3 @@ class SMBRL(AgentBase):
             next(self.prng),
         )
         self.logger["agent/model/loss"] = float(loss.mean())
-        self.logger.log_metrics(self.episodes)

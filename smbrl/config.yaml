@@ -1,21 +1,22 @@
 defaults:
   - _self_
   - agents: smbrl
-  - tasks: pendulum
+  - tasks: pendulum_direction
 
 hydra:
   run:
-    dir: ${log_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}/
+    dir: ${log_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
-    dir: ${log_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}/
+    dir: ${log_dir}/${hydra.job_num}-${hydra.job.name}
     subdir: ${hydra.job.override_dirname}
   job:
     config:
       override_dirname:
         exclude_keys:
           - log_dir
+    chdir: true
 
-log_dir: output
+log_dir: outputs
 
 training:
   safe: True
@@ -33,4 +34,4 @@ training:
   parallel_envs: 20
   task_batch_size: 20
   scale_reward: 1.
-  num_tasks: 5
+  num_tasks:

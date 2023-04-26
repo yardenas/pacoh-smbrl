@@ -6,13 +6,13 @@ from smbrl.utils import fix_task_sampling
 
 
 def make(cfg: DictConfig) -> MetaEnvironmentFactory:
-    if "pendulum" in cfg.tasks:
-        make_env = pendulum.make_env_factory(cfg)
-        make_sampler = pendulum.make_gravity_sampler(
-            cfg.training.seed, cfg.tasks.pendulum.limits
-        )
-    else:
-        raise NotImplementedError
+    assert len(cfg.tasks.keys()) == 1
+    env = list(cfg.tasks.keys())[0]
+    match env:
+        case "pendulum":
+            make_env, make_sampler = pendulum.make(cfg)
+        case _:
+            raise NotImplementedError
     if cfg.training.num_tasks is not None:
         make_sampler = fix_task_sampling(make_sampler, cfg.training.num_tasks)
     return make_env, make_sampler

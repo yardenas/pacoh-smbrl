@@ -1,0 +1,3 @@
+pendulum:
+  task: gravity_direction
+  limits: [-3.1416, 3.1416]

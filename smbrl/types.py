@@ -39,7 +39,6 @@ ModelUpdate = tuple[tuple[PyTree, optax.OptState], jax.Array]
 class Agent(Protocol):
     logger: "TrainingLogger"
     config: DictConfig
-    episodes: int
     model: "Model"
 
     def __call__(self, observation: FloatArray) -> FloatArray:

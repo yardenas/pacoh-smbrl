@@ -18,7 +18,6 @@ class Trainer:
         agent: Optional[Agent] = None,
         start_epoch: int = 0,
         seeds: Optional[List[int]] = None,
-        namespace: Optional[str] = None,
     ):
         self.config = config
         self.agent = agent
@@ -29,14 +28,10 @@ class Trainer:
         self.logger: Optional[logging.TrainingLogger] = None
         self.state_writer: Optional[logging.StateWriter] = None
         self.env: Optional[episodic_async_env.EpisodicAsync] = None
-        self.namespace = namespace
 
     def __enter__(self):
-        if self.namespace is not None:
-            log_path = f"{self.config.log_dir}/{self.namespace}"
-        else:
-            log_path = self.config.log_dir
-        self.logger = logging.TrainingLogger(self.config.log_dir)
+        log_path = os.getcwd()
+        self.logger = logging.TrainingLogger(log_path)
         self.state_writer = logging.StateWriter(log_path)
         self.env = episodic_async_env.EpisodicAsync(
             self.make_env,
@@ -103,6 +98,7 @@ class Trainer:
             episodes_per_task,
             adaptation_episodes,
             train,
+            epoch,
             render_episodes,
         )
         step = (
@@ -128,6 +124,7 @@ class Trainer:
                 "video",
                 30 / config.training.action_repeat,
             )
+        logger.log_metrics(step)
 
     def get_env_random_state(self):
         assert self.env is not None
@@ -147,13 +144,8 @@ class Trainer:
         return self.tasks_sampler(self.config.training.task_batch_size, train)
 
     @classmethod
-    def from_pickle(
-        cls, config: DictConfig, namespace: Optional[str] = None
-    ) -> "Trainer":
-        if namespace is not None:
-            log_path = f"{config.log_dir}/{namespace}"
-        else:
-            log_path = config.log_dir
+    def from_pickle(cls, config: DictConfig) -> "Trainer":
+        log_path = config.log_dir
         with open(os.path.join(log_path, "state.pkl"), "rb") as f:
             make_env, env_rs, agent, epoch, task_sampler = cloudpickle.load(f).values()
         print(f"Resuming experiment from: {log_path}...")
@@ -165,7 +157,6 @@ class Trainer:
             start_epoch=epoch,
             seeds=env_rs,
             agent=agent,
-            namespace=namespace,
         )
 
     @property

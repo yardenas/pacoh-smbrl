@@ -7,14 +7,19 @@ from gymnasium.envs.classic_control.pendulum import angle_normalize
 from gymnasium.spaces import Box
 from omegaconf import DictConfig
 
-from smbrl.types import TaskSampler
+from smbrl.types import MetaEnvironmentFactory, TaskSampler
 
 
-def alter_gravity(env: "GravityPendulum", theta: float) -> None:
-    env.theta_0 = angle_normalize(theta)
+def alter_gravity_direction(env: "GravityPendulum", theta: float) -> None:
+    env.theta_0 = theta
 
 
-def make_gravity_sampler(seed: int, limits: tuple[float, float]) -> TaskSampler:
+@no_type_check
+def alter_gravity_magnitude(env: "GravityPendulum", g: float) -> None:
+    env.unwrapped.g = g
+
+
+def make_sampler(seed: int, limits: tuple[float, float]) -> TaskSampler:
     rs = np.random.RandomState(seed)
 
     def gravity_sampler(
@@ -77,7 +82,20 @@ def make_env_factory(cfg: DictConfig) -> Callable[[], Env[Box, Box]]:
         env = gymnasium.make("Pendulum-v1", render_mode="rgb_array")
         env._max_episode_steps = cfg.training.time_limit  # type: ignore
         env = GravityPendulum(env)
-        env = MetaEnv(env, alter_gravity)
+        match cfg.tasks.pendulum.task:
+            case "gravity_direction":
+                alter_fn = alter_gravity_direction
+            case "gravity_magnitude":
+                alter_fn = alter_gravity_magnitude
+            case _:
+                raise NotImplementedError
+        env = MetaEnv(env, alter_fn)
         return env
 
     return env
+
+
+def make(cfg: DictConfig) -> MetaEnvironmentFactory:
+    make_env = make_env_factory(cfg)
+    sampler = make_sampler(cfg.training.seed, cfg.tasks.pendulum.limits)
+    return make_env, sampler

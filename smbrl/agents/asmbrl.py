@@ -201,7 +201,6 @@ class ASMBRL(AgentBase):
             pacoh_cfg.prior_weight,
             pacoh_cfg.bandwidth,
         )
-        self.episodes += 1
 
     def adapt(self, trajectory: TrajectoryData) -> None:
         add_to_buffer(
