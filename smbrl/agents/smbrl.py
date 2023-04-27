@@ -87,7 +87,7 @@ class SMBRL(AgentBase):
             init_guess,
             next(self.prng),
             self.config.agent.cem,
-        )[0]
+        )[:, 0]
         return np.asarray(action)
 
     def observe(self, trajectory: TrajectoryData) -> None:

@@ -61,9 +61,6 @@ class GravityPendulum(Wrapper[Box, Box]):
     def __init__(self, env):
         super().__init__(env)
         self.theta_0 = 0.0
-        self.init_g = self.unwrapped.g
-        self.init_m = self.unwrapped.m
-        self.init_length = self.unwrapped.l
 
     @no_type_check
     def step(self, u):

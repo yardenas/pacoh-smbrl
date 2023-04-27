@@ -38,8 +38,9 @@ class TrainingLogger:
             self._writer.flush()
 
     def log_metrics(self, step: int, flush: bool = False):
-        print("\n----Training step {} summary----".format(step))
         table = []
+        if len(self._metrics) == 0:
+            return
         for k, v in self._metrics.items():
             metrics = v.result
             self._writer.add_scalars(
