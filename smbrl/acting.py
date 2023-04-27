@@ -42,7 +42,7 @@ def interact(
     trajectory = Trajectory()
     with tqdm(
         total=num_episodes,
-        unit=f"Episode (✖️{environment.num_envs} parallel)",
+        unit=f"Episode (✕{environment.num_envs} parallel)",
     ) as pbar:
         while episode_count < num_episodes:
             if render_episodes:
