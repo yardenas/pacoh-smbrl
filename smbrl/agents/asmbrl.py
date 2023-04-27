@@ -173,17 +173,26 @@ class ASMBRL(AgentBase):
         )
         horizon = self.config.agent.plan_horizon
         init_guess = jnp.zeros((horizon, self.fast_buffer.action.shape[-1]))
-        if self.replan():
-            action = policy(
-                self.model,
-                normalized_obs,
-                horizon,
-                init_guess,
-                next(self.prng),
-                self.config.agent.cem,
-            )
-            self.plan = np.asarray(action)[:, : self.config.agent.replan_every]
-        return self.plan[:, self.replan.count]
+        # if self.replan():
+        #     action = policy(
+        #         self.model,
+        #         normalized_obs,
+        #         horizon,
+        #         init_guess,
+        #         next(self.prng),
+        #         self.config.agent.cem,
+        #     )
+        #     self.plan = np.asarray(action)[:, : self.config.agent.replan_every]
+        # return self.plan[:, self.replan.count]
+        action = policy(
+            self.model,
+            normalized_obs,
+            horizon,
+            init_guess,
+            next(self.prng),
+            self.config.agent.cem,
+        )
+        return np.asarray(action)[:, 0]
 
     def observe(self, trajectory: TrajectoryData) -> None:
         self.obs_normalizer.update_state(
