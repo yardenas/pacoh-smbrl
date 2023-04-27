@@ -73,23 +73,20 @@ COMMON = [
     "training.parallel_envs=5",
     "training.render_episodes=0",
     "training.scale_reward=0.1",
-]
-
-SMBRL_CFG = [
-    "agent.replay_buffer.sequence_length=30",
-    "agent.replay_buffer.num_shots=1",
-] + COMMON
-
-ASMBRL_CFG = [
-    "agent=asmbrl",
     "agent.model.n_layers=2",
     "agent.model.hidden_size=64",
     "agent.replay_buffer.sequence_length=30",
+    "agent.replay_buffer.num_shots=1",
+]
+
+SMBRL_CFG = COMMON.copy()
+
+ASMBRL_CFG = [
+    "agent=asmbrl",
     "agent.posterior.prior_weight=0.",
     "agent.pacoh.prior_weight=0.",
     "agent.update_steps=100",
     "agent.posterior.update_steps=100",
-    "agent.replay_buffer.num_shots=1",
 ] + COMMON
 
 

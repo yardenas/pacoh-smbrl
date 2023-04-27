@@ -27,7 +27,7 @@ pacoh:
   bandwidth: 10.
 posterior:
   update_steps: 100
-  n_prior_samples: 1
+  n_prior_samples: 2
   learning_rate: 1e-3
   prior_weight: 0.
   bandwidth: 10.

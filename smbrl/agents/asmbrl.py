@@ -102,9 +102,9 @@ def infer_posterior_per_task(
     learning_rate: float,
     prior_weight: float,
     bandwidth: float,
-):
+) -> tuple[Model, jax.Array]:
     def infer_posterior(data):
-        posterior, _ = pch.infer_posterior(
+        posterior, logprobs = pch.infer_posterior(
             data,
             hyper_posterior,
             update_steps,
@@ -114,10 +114,11 @@ def infer_posterior_per_task(
             prior_weight,
             bandwidth,
         )
-        return posterior
+        return posterior, logprobs
 
     infer_posterior = jax.vmap(infer_posterior, 1)
-    return infer_posterior(data)
+    posteriors, logprobs = infer_posterior(data)
+    return posteriors, logprobs.mean()
 
 
 class ASMBRL(AgentBase):
@@ -210,13 +211,14 @@ class ASMBRL(AgentBase):
         )
         data = ml.prepare_data(self.slow_buffer, self.config.agent.update_steps)
         pacoh_cfg = self.config.agent.pacoh
-        self.pacoh_learner.update_hyper_posterior(
+        logprobs = self.pacoh_learner.update_hyper_posterior(
             data,
             next(self.prng),
             pacoh_cfg.n_prior_samples,
             pacoh_cfg.prior_weight,
             pacoh_cfg.bandwidth,
         )
+        self.logger["agent/model/pacoh_logprobs"] = float(logprobs)
 
     def adapt(self, trajectory: TrajectoryData) -> None:
         add_to_buffer(
@@ -227,7 +229,7 @@ class ASMBRL(AgentBase):
         )
         posterior_cfg = self.config.agent.posterior
         data = ml.prepare_data(self.fast_buffer, posterior_cfg.update_steps)
-        self.model = self.pacoh_learner.infer_posteriors(
+        self.model, logprobs = self.pacoh_learner.infer_posteriors(
             data,
             next(self.prng),
             posterior_cfg.update_steps,
@@ -236,6 +238,7 @@ class ASMBRL(AgentBase):
             posterior_cfg.prior_weight,
             posterior_cfg.bandwidth,
         )
+        self.logger["agent/model/posterior_logprobs"] = float(logprobs)
 
     def reset(self):
         pass
@@ -266,7 +269,7 @@ class PACOHLearner:
         n_prior_samples: int,
         prior_weight: float,
         bandwidth: float,
-    ) -> None:
+    ) -> jax.Array:
         (self.hyper_posterior, self.learner.state), logprobs = ml.pacoh_regression(
             data,
             self.hyper_prior,
@@ -278,6 +281,7 @@ class PACOHLearner:
             bandwidth,
             key,
         )
+        return logprobs.mean()
 
     def infer_posteriors(
         self,
