@@ -15,8 +15,8 @@ plan_horizon: 15
 update_steps: 100
 replan_every: 1
 cem:
-  num_particles: 50
-  num_iters: 3
+  num_particles: 100
+  num_iters: 10
   num_elite: 10
   stop_cond: 0.1
 pacoh:
