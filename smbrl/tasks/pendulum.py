@@ -1,6 +1,7 @@
-from typing import Callable, Iterable, Optional, no_type_check
+from typing import Callable, Iterable, NamedTuple, Optional, no_type_check
 
 import numpy as np
+import numpy.typing as npt
 from gymnasium import Env
 from gymnasium.core import Wrapper
 from gymnasium.envs.classic_control.pendulum import angle_normalize
@@ -19,14 +20,39 @@ def alter_gravity_magnitude(env: "GravityPendulum", g: float) -> None:
     env.unwrapped.g = g
 
 
-def make_sampler(seed: int, limits: tuple[float, float]) -> TaskSampler:
+class PendulumParams(NamedTuple):
+    g: float
+    theta_0: float
+    length: float
+
+
+@no_type_check
+def alter_all(env: "GravityPendulum", params: PendulumParams) -> None:
+    env.unwrapped.g = params.g
+    env.unwrapped.theta_0 = params.theta_0
+    env.unwrapped.l = params.length  # noqa E741
+
+
+def make_sampler(
+    seed: int,
+    limits: tuple[float, float] | tuple[npt.ArrayLike, npt.ArrayLike],
+    _all: bool,
+) -> TaskSampler:
     rs = np.random.RandomState(seed)
 
     def gravity_sampler(
         batch_size: int, train: Optional[bool] = False
-    ) -> Iterable[float]:
+    ) -> Iterable[float] | Iterable[tuple[float, float, float]]:
+        if _all:
+            limits_array = np.split(np.asarray(limits).T, 2)
+        else:
+            limits_array = np.split(np.asarray(limits), 2)
         for _ in range(batch_size):
-            yield float(rs.uniform(*limits))
+            sample = rs.uniform(*limits_array)
+            if not _all:
+                yield float(sample)
+            else:
+                yield PendulumParams(*map(float, sample[0]))
 
     return gravity_sampler
 
@@ -35,6 +61,9 @@ class GravityPendulum(Wrapper[Box, Box]):
     def __init__(self, env):
         super().__init__(env)
         self.theta_0 = 0.0
+        self.init_g = self.unwrapped.g
+        self.init_m = self.unwrapped.m
+        self.init_length = self.unwrapped.l
 
     @no_type_check
     def step(self, u):
@@ -82,11 +111,13 @@ def make_env_factory(cfg: DictConfig) -> Callable[[], Env[Box, Box]]:
         env = gymnasium.make("Pendulum-v1", render_mode="rgb_array")
         env._max_episode_steps = cfg.training.time_limit  # type: ignore
         env = GravityPendulum(env)
-        match cfg.tasks.pendulum.task:
+        match cfg.environment.pendulum.vary:
             case "gravity_direction":
                 alter_fn = alter_gravity_direction
             case "gravity_magnitude":
                 alter_fn = alter_gravity_magnitude
+            case "all":
+                alter_fn = alter_all
             case _:
                 raise NotImplementedError
         env = MetaEnv(env, alter_fn)
@@ -97,5 +128,6 @@ def make_env_factory(cfg: DictConfig) -> Callable[[], Env[Box, Box]]:
 
 def make(cfg: DictConfig) -> MetaEnvironmentFactory:
     make_env = make_env_factory(cfg)
-    sampler = make_sampler(cfg.training.seed, cfg.tasks.pendulum.limits)
+    _all = cfg.environment.pendulum.vary == "all"
+    sampler = make_sampler(cfg.training.seed, cfg.environment.pendulum.limits, _all)
     return make_env, sampler

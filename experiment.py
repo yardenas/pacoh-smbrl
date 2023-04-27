@@ -5,7 +5,7 @@ from smbrl import tasks
 from smbrl.trainer import Trainer
 
 
-@hydra.main(version_base=None, config_path="smbrl/", config_name="config")
+@hydra.main(version_base=None, config_path="smbrl/configs", config_name="config")
 def experiment(cfg):
     print(
         f"Setting up experiment with the following configuration: "

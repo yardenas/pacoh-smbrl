@@ -12,14 +12,14 @@ from smbrl.utils import grouper
 
 
 def log_results(
-    trajectory: TrajectoryData, logger: TrainingLogger, step: int
+    trajectory: TrajectoryData, logger: TrainingLogger, step: int, prefix: str
 ) -> tuple[float, float]:
     reward = float(trajectory.reward.sum(1).mean())
     cost = float(trajectory.cost.sum(1).mean())
     logger.log_summary(
         {
-            "train/episode_reward_mean": reward,
-            "train/episode_cost_mean": cost,
+            f"{prefix}/episode_reward_mean": reward,
+            f"{prefix}/episode_cost_mean": cost,
         },
         step,
     )
@@ -64,9 +64,11 @@ def interact(
                 step += int(np.prod(np_trajectory.reward.shape))
                 if train:
                     agent.observe(np_trajectory)
-                    reward, cost = log_results(np_trajectory, agent.logger, step)
                 if episode_count < adaptation_episodes:
                     agent.adapt(np_trajectory)
+                reward, cost = log_results(
+                    np_trajectory, agent.logger, step, "train" if train else "evaluate"
+                )
                 pbar.set_postfix({"reward": reward, "cost": cost})
                 render_episodes = max(render_episodes - 1, 0)
                 episodes.append(trajectory)

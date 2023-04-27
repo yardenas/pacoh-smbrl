@@ -1,3 +1,0 @@
-pendulum:
-  task: gravity_magnitude
-  limits: [2.0, 10.]

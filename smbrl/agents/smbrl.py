@@ -50,20 +50,20 @@ class SMBRL(AgentBase):
             max_length=config.training.time_limit // config.training.action_repeat,
             seed=config.training.seed,
             precision=config.training.precision,
-            sequence_length=config.agents.smbrl.replay_buffer.sequence_length
+            sequence_length=config.agent.replay_buffer.sequence_length
             // config.training.action_repeat,
-            num_shots=config.agents.smbrl.replay_buffer.num_shots,
-            batch_size=config.agents.smbrl.replay_buffer.batch_size,
-            capacity=config.agents.smbrl.replay_buffer.capacity,
+            num_shots=config.agent.replay_buffer.num_shots,
+            batch_size=config.agent.replay_buffer.batch_size,
+            capacity=config.agent.replay_buffer.capacity,
             num_episodes=config.training.episodes_per_task,
         )
         self.model = Model(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
             key=next(self.prng),
-            **config.agents.smbrl.model,
+            **config.agent.model,
         )
-        self.model_learner = Learner(self.model, config.agents.smbrl.model_optimizer)
+        self.model_learner = Learner(self.model, config.agent.model_optimizer)
 
     def __call__(
         self,
@@ -78,7 +78,7 @@ class SMBRL(AgentBase):
         normalized_obs = normalize(
             observation, self.obs_normalizer.result.mean, self.obs_normalizer.result.std
         )
-        horizon = self.config.agents.smbrl.plan_horizon
+        horizon = self.config.agent.plan_horizon
         init_guess = jnp.zeros((horizon, self.replay_buffer.action.shape[-1]))
         action = policy(
             normalized_obs,
@@ -86,8 +86,8 @@ class SMBRL(AgentBase):
             horizon,
             init_guess,
             next(self.prng),
-            self.config.agents.smbrl.cem,
-        )
+            self.config.agent.cem,
+        )[0]
         return np.asarray(action)
 
     def observe(self, trajectory: TrajectoryData) -> None:
@@ -107,9 +107,7 @@ class SMBRL(AgentBase):
         self.update_model()
 
     def update_model(self):
-        x, y = ml.prepare_data(
-            self.replay_buffer, self.config.agents.smbrl.update_steps
-        )
+        x, y = ml.prepare_data(self.replay_buffer, self.config.agent.update_steps)
         (self.model, self.model_learner.state), loss = ml.simple_regression(
             (x, y),
             self.model,

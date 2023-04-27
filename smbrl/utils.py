@@ -150,3 +150,14 @@ def fix_task_sampling(sampler: TaskSampler, num_tasks: int) -> TaskSampler:
             yield next(train_tasks_it) if train else next(test_tasks_it)
 
     return sample
+
+
+class Count:
+    def __init__(self, n: int):
+        self.count = 0
+        self.n = n
+
+    def __call__(self):
+        bingo = (self.count + 1) == self.n
+        self.count = (self.count + 1) % self.n
+        return bingo

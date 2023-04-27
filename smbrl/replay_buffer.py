@@ -208,13 +208,12 @@ class OnPolicyReplayBuffer(ReplayBuffer):
             sequence_length,
             precision,
         )
-        assert num_shots == num_episodes
 
     def _sample_batch(
         self, batch_size: int, sequence_length: int, num_shots: int, strict=True
     ) -> Iterator[tuple[Any, ...]]:
         num_episodes, time_limit = self.observation.shape[1:3]
-        assert time_limit > sequence_length and num_episodes >= num_shots
+        assert time_limit > sequence_length, f"{time_limit}, {sequence_length}"
         while True:
             timestep_ids = _make_ids(
                 self.rs,
@@ -228,7 +227,7 @@ class OnPolicyReplayBuffer(ReplayBuffer):
                 if strict
                 else np.ones((batch_size,), dtype=np.int32) * num_episodes
             )
-            episode_ids = self.rs.randint(0, highs, size=(batch_size, num_shots))
+            episode_ids = self.rs.randint(0, highs, size=(batch_size, 1))
             take = lambda x: x[:, episode_ids, timestep_ids[..., :-1]]
             a = take(self.action)
             r = take(self.reward)

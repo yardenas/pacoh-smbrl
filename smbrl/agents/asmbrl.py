@@ -17,7 +17,7 @@ from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import Data, FloatArray
-from smbrl.utils import Learner, add_to_buffer, ensemble_predict, normalize
+from smbrl.utils import Count, Learner, add_to_buffer, ensemble_predict, normalize
 
 
 def buffer_factory(
@@ -136,28 +136,33 @@ class ASMBRL(AgentBase):
             max_length=config.training.time_limit // config.training.action_repeat,
             seed=config.training.seed,
             precision=config.training.precision,
-            sequence_length=config.agents.asmbrl.replay_buffer.sequence_length
+            sequence_length=config.agent.replay_buffer.sequence_length
             // config.training.action_repeat,
-            num_shots=config.agents.asmbrl.replay_buffer.num_shots,
+            num_shots=config.agent.replay_buffer.num_shots,
         )
         self.slow_buffer = buffer_factory("slow", **buffer_kwargs)(
-            config.agents.asmbrl.replay_buffer.capacity,
+            config.agent.replay_buffer.capacity,
             config.training.episodes_per_task,
-            config.agents.asmbrl.replay_buffer.batch_size,
+            config.agent.replay_buffer.batch_size,
         )
         self.fast_buffer = buffer_factory("fast", **buffer_kwargs)(
             config.training.parallel_envs,
             config.training.adaptation_budget,
-            config.agents.asmbrl.replay_buffer.batch_size,
+            config.agent.replay_buffer.batch_size,
         )
         model_factory = lambda key: Model(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
             key=key,
-            **config.agents.asmbrl.model,
+            **config.agent.model,
         )
         self.pacoh_learner = PACOHLearner(model_factory, next(self.prng), config)
         self.model = self.pacoh_learner.sample_prior(next(self.prng))
+        self.replan = Count(config.agent.replan_every)
+        self.plan = np.zeros(
+            (config.training.parallel_envs, config.agent.replan_every)
+            + action_space.shape
+        )
 
     def __call__(
         self,
@@ -166,17 +171,19 @@ class ASMBRL(AgentBase):
         normalized_obs = normalize(
             observation, self.obs_normalizer.result.mean, self.obs_normalizer.result.std
         )
-        horizon = self.config.agents.asmbrl.plan_horizon
+        horizon = self.config.agent.plan_horizon
         init_guess = jnp.zeros((horizon, self.fast_buffer.action.shape[-1]))
-        action = policy(
-            self.model,
-            normalized_obs,
-            horizon,
-            init_guess,
-            next(self.prng),
-            self.config.agents.asmbrl.cem,
-        )
-        return np.asarray(action)
+        if self.replan():
+            action = policy(
+                self.model,
+                normalized_obs,
+                horizon,
+                init_guess,
+                next(self.prng),
+                self.config.agent.cem,
+            )
+            self.plan = np.asarray(action)[:, : self.config.agent.replan_every]
+        return self.plan[:, self.replan.count]
 
     def observe(self, trajectory: TrajectoryData) -> None:
         self.obs_normalizer.update_state(
@@ -192,8 +199,8 @@ class ASMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        data = ml.prepare_data(self.slow_buffer, self.config.agents.asmbrl.update_steps)
-        pacoh_cfg = self.config.agents.asmbrl.pacoh
+        data = ml.prepare_data(self.slow_buffer, self.config.agent.update_steps)
+        pacoh_cfg = self.config.agent.pacoh
         self.pacoh_learner.update_hyper_posterior(
             data,
             next(self.prng),
@@ -209,7 +216,7 @@ class ASMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        posterior_cfg = self.config.agents.asmbrl.posterior
+        posterior_cfg = self.config.agent.posterior
         data = ml.prepare_data(self.fast_buffer, posterior_cfg.update_steps)
         self.model = self.pacoh_learner.infer_posteriors(
             data,
@@ -238,12 +245,10 @@ class PACOHLearner:
         self.hyper_posterior = pch.make_hyper_posterior(
             model_factory,
             n_key,
-            config.agents.asmbrl.pacoh.n_particles,
-            config.agents.asmbrl.pacoh.posterior_stddev,
+            config.agent.pacoh.n_particles,
+            config.agent.pacoh.posterior_stddev,
         )
-        self.learner = Learner(
-            self.hyper_posterior, config.agents.asmbrl.model_optimizer
-        )
+        self.learner = Learner(self.hyper_posterior, config.agent.model_optimizer)
 
     def update_hyper_posterior(
         self,

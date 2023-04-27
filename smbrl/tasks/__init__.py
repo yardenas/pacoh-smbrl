@@ -6,8 +6,8 @@ from smbrl.utils import fix_task_sampling
 
 
 def make(cfg: DictConfig) -> MetaEnvironmentFactory:
-    assert len(cfg.tasks.keys()) == 1
-    env = list(cfg.tasks.keys())[0]
+    assert len(cfg.environment.keys()) == 1
+    env = list(cfg.environment.keys())[0]
     match env:
         case "pendulum":
             make_env, make_sampler = pendulum.make(cfg)

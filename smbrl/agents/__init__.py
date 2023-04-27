@@ -13,22 +13,23 @@ def make(
     config: DictConfig,
     logger: TrainingLogger,
 ) -> Agent:
-    if "smbrl" in config.agents:
-        return SMBRL(
-            observation_space,
-            action_space,
-            config,
-            logger,
-        )
-    elif "asmbrl" in config.agents:
-        return ASMBRL(
-            observation_space,
-            action_space,
-            config,
-            logger,
-        )
-    else:
-        raise NotImplementedError
+    match config.agent.name:
+        case "smbrl":
+            return SMBRL(
+                observation_space,
+                action_space,
+                config,
+                logger,
+            )
+        case "asmbrl":
+            return ASMBRL(
+                observation_space,
+                action_space,
+                config,
+                logger,
+            )
+        case _:
+            raise NotImplementedError
 
 
 __all__ = ["make"]

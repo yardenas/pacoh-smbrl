@@ -31,5 +31,5 @@ class MetaEnv(Wrapper):
 
     def reset(self, *, seed=None, options=None):
         if options is not None and "task" in options:
-            options["task"] = self.alter_env_fn(self.unwrapped, options["task"])
+            options["task"] = self.alter_env_fn(self.env, options["task"])
         return super().reset(seed=seed, options=options)

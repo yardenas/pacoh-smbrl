@@ -1,0 +1,3 @@
+pendulum:
+  vary: gravity_magnitude
+  limits: [3.4, 34.]

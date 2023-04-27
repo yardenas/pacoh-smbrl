@@ -91,6 +91,13 @@ class Trainer:
         adaptation_episodes = (
             episodes_per_task if train else config.training.adaptation_budget
         )
+        step = (
+            epoch
+            * config.training.episodes_per_task
+            * config.training.action_repeat
+            * config.training.time_limit
+            * config.training.parallel_envs
+        )
         summary = acting.epoch(
             agent,
             env,
@@ -98,15 +105,8 @@ class Trainer:
             episodes_per_task,
             adaptation_episodes,
             train,
-            epoch,
+            step,
             render_episodes,
-        )
-        step = (
-            epoch
-            * config.training.episodes_per_task
-            * config.training.action_repeat
-            * config.training.time_limit
-            * config.training.parallel_envs
         )
         objective, cost_rate, feasibilty = summary.metrics
         logger.log_summary(

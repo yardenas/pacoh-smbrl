@@ -14,7 +14,7 @@ from smbrl.utils import ensemble_predict, normalize
 
 @pytest.mark.parametrize("agent", ["asmbrl", "smbrl"], ids=["asmbrl", "smbrl"])
 def test_training(agent):
-    with initialize(version_base=None, config_path="../smbrl/"):
+    with initialize(version_base=None, config_path="../smbrl/configs"):
         cfg = compose(
             config_name="config",
             overrides=[
@@ -24,12 +24,12 @@ def test_training(agent):
                 "training.parallel_envs=5",
                 "training.eval_every=1",
                 "training.action_repeat=4",
-                f"agents={agent}",
-                f"agents.{agent}.model.n_layers=1",
-                f"agents.{agent}.model.hidden_size=32",
-                f"agents.{agent}.update_steps=1",
-                f"agents.{agent}.replay_buffer.sequence_length=16",
-                f"agents.{agent}.replay_buffer.num_shots=1",
+                f"agent={agent}",
+                "agent.model.n_layers=1",
+                "agent.model.hidden_size=32",
+                "agent.update_steps=1",
+                "agent.replay_buffer.sequence_length=16",
+                "agent.replay_buffer.num_shots=1",
             ],
         )
     make_env, task_sampler = tasks.make(cfg)
@@ -76,20 +76,20 @@ COMMON = [
 ]
 
 SMBRL_CFG = [
-    "agents.smbrl.replay_buffer.sequence_length=30",
-    "agents.smbrl.replay_buffer.num_shots=1",
+    "agent.replay_buffer.sequence_length=30",
+    "agent.replay_buffer.num_shots=1",
 ] + COMMON
 
 ASMBRL_CFG = [
-    "agents=asmbrl",
-    "agents.asmbrl.model.n_layers=2",
-    "agents.asmbrl.model.hidden_size=64",
-    "agents.asmbrl.replay_buffer.sequence_length=30",
-    "agents.asmbrl.posterior.prior_weight=0.",
-    "agents.asmbrl.pacoh.prior_weight=0.",
-    "agents.asmbrl.update_steps=100",
-    "agents.asmbrl.posterior.update_steps=100",
-    "agents.asmbrl.replay_buffer.num_shots=1",
+    "agent=asmbrl",
+    "agent.model.n_layers=2",
+    "agent.model.hidden_size=64",
+    "agent.replay_buffer.sequence_length=30",
+    "agent.posterior.prior_weight=0.",
+    "agent.pacoh.prior_weight=0.",
+    "agent.update_steps=100",
+    "agent.posterior.update_steps=100",
+    "agent.replay_buffer.num_shots=1",
 ] + COMMON
 
 
@@ -102,7 +102,7 @@ ASMBRL_CFG = [
     ids=["asmbrl", "smbrl"],
 )
 def test_model_learning(agent, pred_fn_factory, overrides):
-    with initialize(version_base=None, config_path="../smbrl/"):
+    with initialize(version_base=None, config_path="../smbrl/configs"):
         cfg = compose(config_name="config", overrides=overrides)
     make_env, task_sampler = tasks.make(cfg)
     with Trainer(cfg, make_env, task_sampler) as trainer:
@@ -121,7 +121,7 @@ def test_model_learning(agent, pred_fn_factory, overrides):
     agent = trainer.agent
     assert agent is not None
     trainer.env.reset(options={"task": list(trainer.tasks(False))})
-    summary = acting.interact(agent, trainer.env, 1, 1, False)
+    summary, _ = acting.interact(agent, trainer.env, 1, 1, False, 0)
     trajectories = summary[0].as_numpy()
     normalize_fn = lambda x: normalize(
         x, agent.obs_normalizer.result.mean, agent.obs_normalizer.result.std

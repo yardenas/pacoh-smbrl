@@ -84,5 +84,5 @@ def policy(
         init_guess,
         key,
         **cem_config,
-    )[0]
+    )
     return action
