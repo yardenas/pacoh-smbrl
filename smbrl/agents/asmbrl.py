@@ -72,15 +72,9 @@ def policy(
         )
 
     cem_per_env = jax.vmap(
-        lambda m, o: cem.policy(
-            o, sample_per_task(m), horizon, init_guess, key, cem_config
-        ),
-        (0, 0),
+        lambda m, o, i: cem.policy(o, sample_per_task(m), horizon, i, key, cem_config),
     )
-    action = cem_per_env(
-        model,
-        observation,
-    )
+    action = cem_per_env(model, observation, init_guess)
     return action
 
 
@@ -157,7 +151,7 @@ class ASMBRL(AgentBase):
         )
         self.replan = Count(config.agent.replan_every)
         self.plan = np.zeros(
-            (config.training.parallel_envs, config.agent.replan_every)
+            (config.training.parallel_envs, config.agent.plan_horizon)
             + action_space.shape
         )
 
@@ -172,9 +166,9 @@ class ASMBRL(AgentBase):
                 self.obs_normalizer.result.std,
             )
             horizon = self.config.agent.plan_horizon
-            init_guess = np.pad(self.plan, ((0, 0), (0, self.replan.n)), mode="edge")[
-                :, self.replan.n :
-            ]
+            init_guess = np.pad(
+                self.plan, ((0, 0), (0, self.replan.n), (0, 0)), mode="edge"
+            )[:, self.replan.n :]
             action = policy(
                 self.model,
                 normalized_obs,
@@ -200,12 +194,13 @@ class ASMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        data = ml.prepare_data(self.slow_buffer, self.config.agent.update_steps)
+        data = ml.prepare_data(self.slow_buffer, self.config.agent.pacoh.num_examples)
         pacoh_cfg = self.config.agent.pacoh
         logprobs = self.pacoh_learner.update_hyper_posterior(
             data,
             next(self.prng),
             pacoh_cfg.n_prior_samples,
+            self.config.agent.update_steps,
             pacoh_cfg.prior_weight,
             pacoh_cfg.bandwidth,
         )
@@ -219,7 +214,7 @@ class ASMBRL(AgentBase):
             self.config.training.scale_reward,
         )
         posterior_cfg = self.config.agent.posterior
-        data = ml.prepare_data(self.fast_buffer, posterior_cfg.update_steps)
+        data = ml.prepare_data(self.fast_buffer, posterior_cfg.num_examples)
         self.model, logprobs = self.pacoh_learner.infer_posteriors(
             data,
             self.model,
@@ -263,6 +258,7 @@ class PACOHLearner:
         data: Data,
         key: jax.random.KeyArray,
         n_prior_samples: int,
+        update_steps: int,
         prior_weight: float,
         bandwidth: float,
     ) -> jax.Array:
@@ -272,6 +268,7 @@ class PACOHLearner:
             self.hyper_posterior,
             self.learner,
             self.learner.state,
+            update_steps,
             n_prior_samples,
             prior_weight,
             bandwidth,

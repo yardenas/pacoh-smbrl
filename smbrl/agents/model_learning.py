@@ -53,19 +53,19 @@ def pacoh_regression(
     hyper_posterior: m.ParamsDistribution,
     learner: Learner,
     opt_state: OptState,
+    iterations: int,
     n_prior_samples: int,
     prior_weight: float,
     bandwidth: float,
     key: jax.random.KeyArray,
 ) -> types.ModelUpdate:
-    iters = data[0].shape[0]
     (hyper_posterior, opt_state), logprobs = pch.meta_train(
         data,
         hyper_prior,
         hyper_posterior,
         learner.optimizer,
         opt_state,
-        iters,
+        iterations,
         n_prior_samples,
         key,
         prior_weight,
