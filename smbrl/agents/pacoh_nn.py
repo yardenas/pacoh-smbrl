@@ -161,22 +161,16 @@ def mll(batch_x, batch_y, model, prior, prior_weight):
 
 def infer_posterior(
     data,
-    hyper_posterior,
+    prior,
+    posterior,
     iterations,
-    n_prior_samples,
     learning_rate,
     key,
     prior_weight=1e-7,
     bandwidth=10.0,
 ):
-    # Sample model instances from the hyper-posterior to form an ensemble
-    # of neural networks.
-    models = jax.vmap(hyper_posterior.sample)(jax.random.split(key, n_prior_samples))
-    models = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), models)
-    # Marginalize over samples of each particle in the hyper-posterior.
-    prior = jax.tree_map(lambda x: x.mean(0), hyper_posterior)
     optimizer = optax.flatten(optax.adam(learning_rate))
-    opt_state = optimizer.init(models)
+    opt_state = optimizer.init(posterior)
     num_examples = data[0].shape[0]
 
     def update(carry, inputs):
@@ -196,9 +190,19 @@ def infer_posterior(
         return (model, opt_state), mll_value
 
     (posterior, _), mll_values = jax.lax.scan(
-        update, (models, opt_state), jnp.asarray(jax.random.split(key, iterations))
+        update, (posterior, opt_state), jnp.asarray(jax.random.split(key, iterations))
     )
     return posterior, mll_values
+
+
+def sample_prior(hyper_posterior, key, n_prior_samples):
+    # Sample model instances from the hyper-posterior to form an ensemble
+    # of neural networks.
+    model = jax.vmap(hyper_posterior.sample)(jax.random.split(key, n_prior_samples))
+    model = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), model)
+    # Marginalize over samples of each particle in the hyper-posterior.
+    prior = jax.tree_map(lambda x: x.mean(0), hyper_posterior)
+    return model, prior
 
 
 def make_hyper_prior(model):
