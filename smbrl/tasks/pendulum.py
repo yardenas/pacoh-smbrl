@@ -46,6 +46,7 @@ def make_sampler(
         if _all:
             limits_array = np.split(np.asarray(limits).T, 2)
         else:
+            assert len(limits) == 2
             limits_array = np.split(np.asarray(limits), 2)
         for _ in range(batch_size):
             sample = rs.uniform(*limits_array)
