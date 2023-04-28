@@ -1,3 +1,5 @@
+from itertools import cycle
+
 import distrax
 import equinox as eqx
 import jax
@@ -20,37 +22,55 @@ def meta_train(
     prior_weight=1e-4,
     bandwidth=10.0,
 ):
-    def _update(carry, inputs):
-        hyper_posterior, opt_state = carry
-        key = inputs
-        key, next_key = jax.random.split(key)
-        ids = jax.random.choice(next_key, num_examples)
-        meta_batch_x, meta_batch_y = jax.tree_map(lambda x: x[ids], data)
-        # vmap to compute the grads for each svgd particle.
-        mll_fn = jax.vmap(
-            jax.value_and_grad(
-                lambda hyper_posterior_particle, key: meta_mll(
-                    meta_batch_x,
-                    meta_batch_y,
-                    hyper_posterior_particle,
-                    hyper_prior,
-                    key,
-                    n_prior_samples,
-                    prior_weight,
-                )
+    collect_logprobs = []
+    for batch, _ in zip(cycle(data), range(iterations)):
+        key, n_key = jax.random.split(key)
+        (hyper_posterior, opt_state), logprobs = pacoh_update(
+            batch,
+            hyper_posterior,
+            opt_state,
+            hyper_prior,
+            optimizer,
+            n_prior_samples,
+            n_key,
+            prior_weight,
+            bandwidth,
+        )
+        collect_logprobs.append(logprobs)
+    return (hyper_posterior, opt_state), jnp.asarray(collect_logprobs).mean()
+
+
+@eqx.filter_jit
+def pacoh_update(
+    batch,
+    hyper_posterior,
+    opt_state,
+    hyper_prior,
+    optimizer,
+    n_prior_samples,
+    key,
+    prior_weight,
+    bandwidth,
+):
+    meta_batch_x, meta_batch_y = batch
+    # vmap to compute the grads for each svgd particle.
+    mll_fn = jax.vmap(
+        jax.value_and_grad(
+            lambda hyper_posterior_particle, key: meta_mll(
+                meta_batch_x,
+                meta_batch_y,
+                hyper_posterior_particle,
+                hyper_prior,
+                key,
+                n_prior_samples,
+                prior_weight,
             )
         )
-        hyper_posterior, opt_state, log_probs = svgd(
-            hyper_posterior, mll_fn, bandwidth, optimizer, opt_state, key=key
-        )
-        return (hyper_posterior, opt_state), log_probs
-
-    num_examples = data[0].shape[0]
-    return jax.lax.scan(
-        _update,
-        (hyper_posterior, opt_state),
-        jnp.asarray(jax.random.split(key, iterations)),
     )
+    hyper_posterior, opt_state, log_probs = svgd(
+        hyper_posterior, mll_fn, bandwidth, optimizer, opt_state, key=key
+    )
+    return (hyper_posterior, opt_state), log_probs
 
 
 def svgd(model, mll_fn, bandwidth, optimizer, opt_state, *, key=None):
@@ -81,6 +101,20 @@ def _to_matrix(params, num_particles):
     flattened_params, reconstruct_tree = jax.flatten_util.ravel_pytree(params)  # type: ignore # noqa E501
     matrix = flattened_params.reshape((num_particles, -1))
     return matrix, reconstruct_tree
+
+
+# Based on tf-probability implementation of batched pairwise matrices:
+# https://github.com/tensorflow/probability/blob/f3777158691787d3658b5e80883fe1a933d48989/tensorflow_probability/python/math/psd_kernels/internal/util.py#L190
+def rbf_kernel(x, y, bandwidth=None):
+    row_norm_x = (x**2).sum(-1)[..., None]
+    row_norm_y = (y**2).sum(-1)[..., None, :]
+    pairwise = jnp.clip(row_norm_x + row_norm_y - 2.0 * jnp.matmul(x, y.T), 0.0)
+    bandwidth = bandwidth if bandwidth is not None else jnp.median(pairwise)
+    n_x = pairwise.shape[-2]
+    bandwidth = 0.5 * bandwidth / jnp.log(n_x + 1)
+    bandwidth = jnp.maximum(jax.lax.stop_gradient(bandwidth), 1e-5)
+    k_xy = jnp.exp(-pairwise / bandwidth)
+    return k_xy
 
 
 def meta_mll(
@@ -114,20 +148,6 @@ def meta_mll(
         hyper_prior_particle.log_prob(hyper_posterior_particle) * prior_weight
     )
     return (mll + log_prob_prior).mean()
-
-
-# Based on tf-probability implementation of batched pairwise matrices:
-# https://github.com/tensorflow/probability/blob/f3777158691787d3658b5e80883fe1a933d48989/tensorflow_probability/python/math/psd_kernels/internal/util.py#L190
-def rbf_kernel(x, y, bandwidth=None):
-    row_norm_x = (x**2).sum(-1)[..., None]
-    row_norm_y = (y**2).sum(-1)[..., None, :]
-    pairwise = jnp.clip(row_norm_x + row_norm_y - 2.0 * jnp.matmul(x, y.T), 0.0)
-    bandwidth = bandwidth if bandwidth is not None else jnp.median(pairwise)
-    n_x = pairwise.shape[-2]
-    bandwidth = 0.5 * bandwidth / jnp.log(n_x + 1)
-    bandwidth = jnp.maximum(jax.lax.stop_gradient(bandwidth), 1e-5)
-    k_xy = jnp.exp(-pairwise / bandwidth)
-    return k_xy
 
 
 def mll(batch_x, batch_y, model, prior, prior_weight):

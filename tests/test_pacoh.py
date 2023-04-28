@@ -88,7 +88,7 @@ def sample_data(data_generating_process, num_tasks):
     out = []
     for _ in range(num_tasks):
         out.append(next(data_generating_process.train_set))
-    return tuple(map(np.stack, zip(*out)))
+    return out
 
 
 def predict(model, x):
@@ -186,7 +186,7 @@ def test_training():
     train_iter = iter(data_generating_process.train_set)
     for _ in range(3):
         key, key_next = jax.random.split(key)
-        (hyper_posterior, opt_state), _ = eqx.filter_jit(pacoh.meta_train)(
+        (hyper_posterior, opt_state), _ = pacoh.meta_train(
             train_dataset,
             hyper_prior,
             hyper_posterior,
