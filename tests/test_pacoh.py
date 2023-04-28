@@ -88,7 +88,7 @@ def sample_data(data_generating_process, num_tasks):
     out = []
     for _ in range(num_tasks):
         out.append(next(data_generating_process.train_set))
-    return out
+    return tuple(map(np.stack, zip(*out)))
 
 
 def predict(model, x):
@@ -186,7 +186,7 @@ def test_training():
     train_iter = iter(data_generating_process.train_set)
     for _ in range(3):
         key, key_next = jax.random.split(key)
-        (hyper_posterior, opt_state), _ = pacoh.meta_train(
+        (hyper_posterior, opt_state), _ = eqx.filter_jit(pacoh.meta_train)(
             train_dataset,
             hyper_prior,
             hyper_posterior,
@@ -205,9 +205,11 @@ def test_training():
     (context_x, context_y), (test_x, test_y) = next(data_generating_process.test_set)
     key, key_next = jax.random.split(key)
     # Sample ensemble of models per task.
-    model, prior = jax.vmap(pacoh.sample_prior, (None, 0, None), (0, None))(
-        hyper_posterior, jnp.asarray(jax.random.split(key_next, context_x.shape[0])), 5
-    )
+    model = jax.vmap(
+        pacoh.sample_prior_models,
+        (None, 0, None),
+    )(hyper_posterior, jnp.asarray(jax.random.split(key_next, context_x.shape[0])), 5)
+    prior = pacoh.compute_prior(hyper_posterior)
     infer_posteriors = lambda m, x, y: pacoh.infer_posterior(
         (x, y), prior, m, 500, 3e-4, key_next, 1e-7, 1000
     )

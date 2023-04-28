@@ -1,5 +1,3 @@
-from itertools import cycle
-
 import distrax
 import equinox as eqx
 import jax
@@ -22,55 +20,37 @@ def meta_train(
     prior_weight=1e-4,
     bandwidth=10.0,
 ):
-    collect_logprobs = []
-    for batch, _ in zip(cycle(data), range(iterations)):
-        key, n_key = jax.random.split(key)
-        (hyper_posterior, opt_state), logprobs = pacoh_update(
-            batch,
-            hyper_posterior,
-            opt_state,
-            hyper_prior,
-            optimizer,
-            n_prior_samples,
-            n_key,
-            prior_weight,
-            bandwidth,
-        )
-        collect_logprobs.append(logprobs)
-    return (hyper_posterior, opt_state), jnp.asarray(collect_logprobs).mean()
-
-
-@eqx.filter_jit
-def pacoh_update(
-    batch,
-    hyper_posterior,
-    opt_state,
-    hyper_prior,
-    optimizer,
-    n_prior_samples,
-    key,
-    prior_weight,
-    bandwidth,
-):
-    meta_batch_x, meta_batch_y = batch
-    # vmap to compute the grads for each svgd particle.
-    mll_fn = jax.vmap(
-        jax.value_and_grad(
-            lambda hyper_posterior_particle, key: meta_mll(
-                meta_batch_x,
-                meta_batch_y,
-                hyper_posterior_particle,
-                hyper_prior,
-                key,
-                n_prior_samples,
-                prior_weight,
+    def _update(carry, inputs):
+        hyper_posterior, opt_state = carry
+        key = inputs
+        key, next_key = jax.random.split(key)
+        ids = jax.random.choice(next_key, num_examples)
+        meta_batch_x, meta_batch_y = jax.tree_map(lambda x: x[ids], data)
+        # vmap to compute the grads for each svgd particle.
+        mll_fn = jax.vmap(
+            jax.value_and_grad(
+                lambda hyper_posterior_particle, key: meta_mll(
+                    meta_batch_x,
+                    meta_batch_y,
+                    hyper_posterior_particle,
+                    hyper_prior,
+                    key,
+                    n_prior_samples,
+                    prior_weight,
+                )
             )
         )
+        hyper_posterior, opt_state, log_probs = svgd(
+            hyper_posterior, mll_fn, bandwidth, optimizer, opt_state, key=key
+        )
+        return (hyper_posterior, opt_state), log_probs
+
+    num_examples = data[0].shape[0]
+    return jax.lax.scan(
+        _update,
+        (hyper_posterior, opt_state),
+        jnp.asarray(jax.random.split(key, iterations)),
     )
-    hyper_posterior, opt_state, log_probs = svgd(
-        hyper_posterior, mll_fn, bandwidth, optimizer, opt_state, key=key
-    )
-    return (hyper_posterior, opt_state), log_probs
 
 
 def svgd(model, mll_fn, bandwidth, optimizer, opt_state, *, key=None):
@@ -195,14 +175,18 @@ def infer_posterior(
     return posterior, mll_values
 
 
-def sample_prior(hyper_posterior, key, n_prior_samples):
+def sample_prior_models(hyper_posterior, key, n_prior_samples):
     # Sample model instances from the hyper-posterior to form an ensemble
     # of neural networks.
     model = jax.vmap(hyper_posterior.sample)(jax.random.split(key, n_prior_samples))
     model = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), model)
+    return model
+
+
+def compute_prior(hyper_posterior):
     # Marginalize over samples of each particle in the hyper-posterior.
     prior = jax.tree_map(lambda x: x.mean(0), hyper_posterior)
-    return model, prior
+    return prior
 
 
 def make_hyper_prior(model):
