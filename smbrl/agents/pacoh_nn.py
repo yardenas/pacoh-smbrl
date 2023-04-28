@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import optax
 
 from smbrl.agents.models import ParamsDistribution
-from smbrl.utils import ensemble_predict
+from smbrl.utils import all_finite, ensemble_predict, update_if
 
 
 def meta_train(
@@ -73,6 +73,11 @@ def svgd(model, mll_fn, bandwidth, optimizer, opt_state, *, key=None):
     stein_grads = -(kxx @ score + kernel_grads) / num_particles
     stein_grads = reconstruct_tree(stein_grads.ravel())
     updates, new_opt_state = optimizer.update(stein_grads, opt_state)
+    all_ok = all_finite(stein_grads)
+    updates = update_if(
+        all_ok, updates, jax.tree_map(lambda x: jnp.zeros_like(x), updates)
+    )
+    new_opt_state = update_if(all_ok, new_opt_state, opt_state)
     new_model = optax.apply_updates(model, updates)
     return new_model, new_opt_state, log_probs.mean()
 
