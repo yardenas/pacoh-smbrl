@@ -2,6 +2,7 @@ from typing import Callable
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import numpy as np
 from gymnasium import spaces
 from omegaconf import DictConfig
@@ -72,9 +73,11 @@ def policy(
         )
 
     cem_per_env = jax.vmap(
-        lambda m, o, i: cem.policy(o, sample_per_task(m), horizon, i, key, cem_config),
+        lambda m, o: cem.policy(
+            o, sample_per_task(m), horizon, init_guess, key, cem_config
+        ),
     )
-    action = cem_per_env(model, observation, init_guess)
+    action = cem_per_env(model, observation)
     return action
 
 
@@ -166,9 +169,7 @@ class ASMBRL(AgentBase):
                 self.obs_normalizer.result.std,
             )
             horizon = self.config.agent.plan_horizon
-            init_guess = np.pad(
-                self.plan, ((0, 0), (0, self.replan.n), (0, 0)), mode="edge"
-            )[:, self.replan.n :]
+            init_guess = jnp.zeros((horizon, self.fast_buffer.action.shape[-1]))
             action = policy(
                 self.model,
                 normalized_obs,
