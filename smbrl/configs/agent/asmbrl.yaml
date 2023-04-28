@@ -1,14 +1,14 @@
 name: asmbrl
 replay_buffer:
-  batch_size: 128
-  sequence_length: 64
+  batch_size: 16
+  sequence_length: 32
   num_shots: 4
   capacity: 1000
 model:
   n_layers: 2
   hidden_size: 128
 model_optimizer:
-  lr: 3e-4
+  lr: 1e-3
   eps: 1e-5
   clip: 0.5
 plan_horizon: 15
@@ -18,18 +18,18 @@ cem:
   num_iters: 10
   num_elite: 10
   stop_cond: 0.1
-update_steps: 1000 
+update_steps: 1000
 pacoh:
   num_examples: 100
-  n_particles: 5
+  n_particles: 3
   posterior_stddev: 0.3
-  n_prior_samples: 2
+  n_prior_samples: 5
   prior_weight: 0.
   bandwidth: 10.
 posterior:
-  update_steps: 500
+  update_steps: 100
   num_examples: 100
-  n_prior_samples: 2
-  learning_rate: 1e-3
+  n_prior_samples: 5
+  learning_rate: 3e-4
   prior_weight: 0.
   bandwidth: 10.
