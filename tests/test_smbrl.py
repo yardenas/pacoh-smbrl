@@ -66,16 +66,14 @@ def asmbrl_predictions(agent, horizon):
     return mean_step, mean_sample
 
 
+NUM_TASKS = 5
+
 COMMON = [
-    "training.time_limit=32",
     "training.episodes_per_task=1",
-    "training.task_batch_size=5",
-    "training.parallel_envs=5",
+    f"training.task_batch_size={NUM_TASKS}",
+    f"training.parallel_envs={NUM_TASKS}",
     "training.render_episodes=0",
     "training.scale_reward=0.1",
-    "agent.model.n_layers=2",
-    "agent.model.hidden_size=64",
-    "agent.replay_buffer.sequence_length=30",
     "agent.replay_buffer.num_shots=1",
 ]
 
@@ -83,8 +81,6 @@ SMBRL_CFG = COMMON.copy()
 
 ASMBRL_CFG = [
     "agent=asmbrl",
-    "agent.posterior.prior_weight=0.",
-    "agent.pacoh.prior_weight=0.",
     "agent.update_steps=100",
     "agent.posterior.update_steps=100",
 ] + COMMON
@@ -130,7 +126,7 @@ def test_model_learning(agent, pred_fn_factory, overrides):
         trajectories.reward,
         trajectories.cost,
     )
-    trajectories = TrajectoryData(*map(lambda x: x[:, None], trajectories))
+    trajectories = TrajectoryData(*map(lambda x: x[:, None, :35], trajectories))
     context = 10
     horizon = trajectories.observation.shape[2] - context
     step, sample = pred_fn_factory(agent, horizon)
@@ -165,7 +161,7 @@ def plot(y, y_hat, context):
     t = np.arange(y.shape[2])
 
     plt.figure(figsize=(10, 5), dpi=600)
-    for i in range(5):
+    for i in range(NUM_TASKS):
         plt.subplot(3, 4, i + 1)
         plt.plot(t, y[i, 0, :, 2], "b.", label="observed")
         plt.plot(

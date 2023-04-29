@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-from typing import Callable
+from typing import Callable, Sequence
 
 import distrax
 import equinox as eqx
@@ -26,11 +26,11 @@ class Model(eqx.Module):
         state_dim: int,
         action_dim: int,
         hidden_size: int,
-        state_stddev_clip: tuple[float, float] = (
+        state_stddev_clip: Sequence[float] = (
             0.5,
             1.0,
         ),
-        reward_stddev_clip: tuple[float, float] = (
+        reward_stddev_clip: Sequence[float] = (
             0.5,
             1.0,
         ),
@@ -44,8 +44,9 @@ class Model(eqx.Module):
         self.encoder = eqx.nn.Linear(state_dim + action_dim, hidden_size, key=keys[1])
         self.state_decoder = eqx.nn.Linear(hidden_size, state_dim * 2, key=keys[2])
         self.reward_decoder = eqx.nn.Linear(hidden_size, 2, key=keys[3])
-        self.state_stddev_clip = state_stddev_clip
-        self.reward_stddev_clip = reward_stddev_clip
+        assert len(state_stddev_clip) == 2 and len(reward_stddev_clip) == 2
+        self.state_stddev_clip = state_stddev_clip[0], state_stddev_clip[1]
+        self.reward_stddev_clip = reward_stddev_clip[0], reward_stddev_clip[1]
 
     def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         x = jax.vmap(self.encoder)(x)
