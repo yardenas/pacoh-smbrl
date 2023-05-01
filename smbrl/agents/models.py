@@ -1,6 +1,6 @@
 # mypy: disable-error-code="attr-defined"
-from typing import Callable, Sequence
 
+from typing import Callable
 import distrax
 import equinox as eqx
 import jax
@@ -9,16 +9,13 @@ import jax.numpy as jnp
 from jaxtyping import PyTree
 
 from smbrl.types import Prediction
-from smbrl.utils import clip_stddev
 
 
 class Model(eqx.Module):
     layers: list[eqx.nn.Linear]
     encoder: eqx.nn.Linear
-    state_decoder: eqx.nn.Linear
-    reward_decoder: eqx.nn.Linear
-    state_stddev_clip: tuple[float, float]
-    reward_stddev_clip: tuple[float, float]
+    decoder: eqx.nn.Linear
+    stddev: jax.Array
 
     def __init__(
         self,
@@ -26,41 +23,30 @@ class Model(eqx.Module):
         state_dim: int,
         action_dim: int,
         hidden_size: int,
-        state_stddev_clip: Sequence[float] = (
-            0.5,
-            1.0,
-        ),
-        reward_stddev_clip: Sequence[float] = (
-            0.5,
-            1.0,
-        ),
         *,
         key: jax.Array
     ):
-        keys = jax.random.split(key, 3 + n_layers)
+        keys = jax.random.split(key, 2 + n_layers)
         self.layers = [
             eqx.nn.Linear(hidden_size, hidden_size, key=k) for k in keys[:n_layers]
         ]
         self.encoder = eqx.nn.Linear(state_dim + action_dim, hidden_size, key=keys[1])
-        self.state_decoder = eqx.nn.Linear(hidden_size, state_dim * 2, key=keys[2])
-        self.reward_decoder = eqx.nn.Linear(hidden_size, 2, key=keys[3])
-        assert len(state_stddev_clip) == 2 and len(reward_stddev_clip) == 2
-        self.state_stddev_clip = state_stddev_clip[0], state_stddev_clip[1]
-        self.reward_stddev_clip = reward_stddev_clip[0], reward_stddev_clip[1]
+        self.decoder = eqx.nn.Linear(hidden_size, state_dim + 1, key=keys[2])
+        self.stddev = jnp.ones((state_dim + 1,)) * -5.
 
     def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         x = jax.vmap(self.encoder)(x)
         for layer in self.layers:
             x = jnn.relu(jax.vmap(layer)(x))
-        next_state = jax.vmap(self.state_decoder)(x)
-        next_state, next_state_stddev = jnp.split(next_state, 2, -1)
-        reward = jax.vmap(self.reward_decoder)(x)
-        reward, reward_stddev = jnp.split(reward, 2, -1)
-        next_state_stddev = clip_stddev(next_state_stddev, *self.state_stddev_clip)
-        reward_stddev = clip_stddev(reward_stddev, *self.reward_stddev_clip)
+        split = lambda x: jnp.split(x, [self.decoder.out_features - 1], -1)
+        pred = jax.vmap(self.decoder)(x)
+        state, reward = split(pred)
+        state_stddev, reward_stddev = split(self.stddev)
+        state_stddev = jnp.exp(jnp.ones_like(state) * state_stddev)
+        reward_stddev = jnp.exp(jnp.ones_like(reward) * reward_stddev)
         return (
-            to_outs(next_state, reward.squeeze(-1)),
-            to_outs(next_state_stddev, reward_stddev.squeeze(-1)),
+            to_outs(state, reward.squeeze(-1)),
+            to_outs(state_stddev, reward_stddev.squeeze(-1)),
         )
 
     def step(self, state: jax.Array, action: jax.Array) -> Prediction:
@@ -72,7 +58,7 @@ class Model(eqx.Module):
         mus, stddevs = self(x)
         if not batched:
             mus, stddevs = mus.squeeze(0), stddevs.squeeze(0)
-        split = lambda x: jnp.split(x, [self.state_decoder.out_features // 2], axis=-1)  # type: ignore # noqa: E501
+        split = lambda x: jnp.split(x, [self.decoder.out_features - 1], -1)
         state_mu, reward_mu = split(mus)
         state_stddev, reward_stddev = split(stddevs)
         reward_mu = reward_mu.squeeze(-1)

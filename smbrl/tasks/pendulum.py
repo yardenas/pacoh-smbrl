@@ -219,7 +219,7 @@ def make_env_factory(cfg: DictConfig) -> Callable[[], Env[Box, Box]]:
 
         from smbrl.wrappers import MetaEnv
 
-        env = gymnasium.make("Pendulum-v1", render_mode="human")
+        env = gymnasium.make("Pendulum-v1", render_mode="rgb_array")
         env._max_episode_steps = cfg.training.time_limit  # type: ignore
         env = GravityPendulum(env)
         match cfg.environment.pendulum.vary:
