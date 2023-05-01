@@ -7,8 +7,6 @@ replay_buffer:
 model:
   n_layers: 2
   hidden_size: 128
-  state_stddev_clip: [0.5, 1.]
-  reward_stddev_clip: [0.5, 1.]
   
 model_optimizer:
   lr: 3e-4

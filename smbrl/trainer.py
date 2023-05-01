@@ -2,7 +2,6 @@ import os
 from typing import Any, Iterable, List, Optional
 
 import cloudpickle
-import numpy as np
 from omegaconf import DictConfig
 
 from smbrl import acting, agents, episodic_async_env, logging, utils
@@ -117,7 +116,7 @@ class Trainer:
         )
         if render_episodes > 0:
             logger.log_video(
-                np.asarray(summary.videos)[0].swapaxes(0, 1)[:5],
+                summary.videos[: config.training.parallel_envs],
                 self.step,
                 "video",
                 30 / config.training.action_repeat,

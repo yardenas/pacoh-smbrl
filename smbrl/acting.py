@@ -45,7 +45,8 @@ def interact(
         unit=f"Episode (✕ {environment.num_envs} parallel)",
     ) as pbar:
         while episode_count < num_episodes:
-            if render_episodes:
+            render = episode_count >= adaptation_episodes - 1 and render_episodes
+            if render:
                 trajectory.frames.append(environment.render())
             actions = agent(observations)
             next_observations, rewards, done, infos = environment.step(actions)
