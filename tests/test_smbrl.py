@@ -18,6 +18,7 @@ def test_training(agent):
         cfg = compose(
             config_name="config",
             overrides=[
+                "log_dir=/dev/null",
                 "training.time_limit=32",
                 "training.episodes_per_task=1",
                 "training.task_batch_size=5",
