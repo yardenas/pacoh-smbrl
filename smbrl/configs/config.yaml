@@ -7,7 +7,7 @@ hydra:
   run:
     dir: ${log_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
-    dir: ${log_dir}/${hydra.job_num}-${hydra.job.name}
+    dir: ${log_dir}/${hydra.job.name}
     subdir: ${hydra.job.override_dirname}
   job:
     config:

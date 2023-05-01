@@ -59,7 +59,8 @@ def interact(
             )
             trajectory.transitions.append(transition)
             observations = next_observations
-            if done.all():
+            if done.any():
+                assert done.all()
                 np_trajectory = trajectory.as_numpy()
                 step += int(np.prod(np_trajectory.reward.shape))
                 if train:
