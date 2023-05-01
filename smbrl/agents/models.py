@@ -32,7 +32,7 @@ class Model(eqx.Module):
         ]
         self.encoder = eqx.nn.Linear(state_dim + action_dim, hidden_size, key=keys[1])
         self.decoder = eqx.nn.Linear(hidden_size, state_dim + 1, key=keys[2])
-        self.stddev = jnp.ones((state_dim + 1,)) * -10.
+        self.stddev = jnp.ones((state_dim + 1,)) * -5.
 
     def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         x = jax.vmap(self.encoder)(x)

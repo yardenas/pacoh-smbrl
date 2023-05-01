@@ -89,7 +89,7 @@ def epoch(
     train: bool,
     step: int,
     render_episodes: int = 0,
-) -> IterationSummary:
+) -> tuple[IterationSummary, int]:
     summary = IterationSummary()
     batches = list(grouper(tasks, env.num_envs))
     for batch in batches:
@@ -106,4 +106,4 @@ def epoch(
         )
         agent.reset()
         summary.extend(samples)
-    return summary
+    return summary, step
