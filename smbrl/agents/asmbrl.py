@@ -120,7 +120,7 @@ class ASMBRL(AgentBase):
     ):
         super().__init__(config, logger)
         self.obs_normalizer = m.MetricsAccumulator()
-        buffer_kwargs = dict(
+        self.buffer_kwargs = dict(
             observation_shape=observation_space.shape,
             action_shape=action_space.shape,
             max_length=config.training.time_limit // config.training.action_repeat,
@@ -130,12 +130,12 @@ class ASMBRL(AgentBase):
             // config.training.action_repeat,
             num_shots=config.agent.replay_buffer.num_shots,
         )
-        self.slow_buffer = buffer_factory("slow", **buffer_kwargs)(
+        self.slow_buffer = buffer_factory("slow", **self.buffer_kwargs)(
             config.agent.replay_buffer.capacity,
             config.training.episodes_per_task,
             config.agent.replay_buffer.batch_size,
         )
-        self.fast_buffer = buffer_factory("fast", **buffer_kwargs)(
+        self.fast_buffer = buffer_factory("fast", **self.buffer_kwargs)(
             config.training.parallel_envs,
             config.training.adaptation_budget,
             config.agent.replay_buffer.batch_size,
@@ -232,6 +232,11 @@ class ASMBRL(AgentBase):
             next(self.prng),
             self.config.agent.posterior.n_prior_samples,
             self.config.training.task_batch_size,
+        )
+        self.fast_buffer = buffer_factory("fast", **self.buffer_kwargs)(
+            self.config.training.parallel_envs,
+            self.config.training.adaptation_budget,
+            self.config.agent.replay_buffer.batch_size,
         )
 
 

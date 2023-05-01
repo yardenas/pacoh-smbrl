@@ -59,7 +59,8 @@ def interact(
             )
             trajectory.transitions.append(transition)
             observations = next_observations
-            if done.all():
+            if done.any():
+                assert done.all()
                 np_trajectory = trajectory.as_numpy()
                 step += int(np.prod(np_trajectory.reward.shape))
                 if train:
@@ -88,7 +89,7 @@ def epoch(
     train: bool,
     step: int,
     render_episodes: int = 0,
-) -> IterationSummary:
+) -> tuple[IterationSummary, int]:
     summary = IterationSummary()
     batches = list(grouper(tasks, env.num_envs))
     for batch in batches:
@@ -105,4 +106,4 @@ def epoch(
         )
         agent.reset()
         summary.extend(samples)
-    return summary
+    return summary, step
