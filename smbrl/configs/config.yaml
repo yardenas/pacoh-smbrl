@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - agent: smbrl
-  - environment: pendulum_all
+  - environment: pendulum_direction
 
 hydra:
   run:
