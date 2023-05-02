@@ -72,7 +72,8 @@ def interact(
                     np_trajectory, agent.logger, step, "train" if train else "evaluate"
                 )
                 pbar.set_postfix({"reward": reward, "cost": cost})
-                render_episodes = max(render_episodes - 1, 0)
+                if render:
+                    render_episodes = max(render_episodes - 1, 0)
                 episodes.append(trajectory)
                 trajectory = Trajectory()
                 pbar.update(1)

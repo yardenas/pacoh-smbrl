@@ -32,7 +32,7 @@ class Model(eqx.Module):
         ]
         self.encoder = eqx.nn.Linear(state_dim + action_dim, hidden_size, key=keys[1])
         self.decoder = eqx.nn.Linear(hidden_size, state_dim + 1, key=keys[2])
-        self.stddev = jnp.ones((state_dim + 1,)) * -5.
+        self.stddev = jnp.ones((state_dim + 1,)) * -10.
 
     def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         x = jax.vmap(self.encoder)(x)
@@ -42,8 +42,8 @@ class Model(eqx.Module):
         pred = jax.vmap(self.decoder)(x)
         state, reward = split(pred)
         state_stddev, reward_stddev = split(self.stddev)
-        state_stddev = jnp.exp(jnp.ones_like(state) * state_stddev)
-        reward_stddev = jnp.exp(jnp.ones_like(reward) * reward_stddev)
+        state_stddev = jnp.exp(jnp.ones_like(state) * state_stddev) * 0.1
+        reward_stddev = jnp.exp(jnp.ones_like(reward) * reward_stddev) * 0.1
         return (
             to_outs(state, reward.squeeze(-1)),
             to_outs(state_stddev, reward_stddev.squeeze(-1)),

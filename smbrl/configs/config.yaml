@@ -22,7 +22,7 @@ training:
   safe: True
   cost_limit: 25
   seed: 0
-  time_limit: 100
+  time_limit: 1000
   episodes_per_task: 10
   eval_episodes_per_task: 10
   adaptation_budget: 1
@@ -33,5 +33,5 @@ training:
   precision: 32
   parallel_envs: 20
   task_batch_size: 20
-  scale_reward: 0.1
+  scale_reward: 1.
   num_tasks: 20
