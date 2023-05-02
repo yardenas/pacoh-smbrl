@@ -43,14 +43,9 @@ class TrainingLogger:
             return
         for k, v in self._metrics.items():
             metrics = v.result
-            self._writer.add_scalars(
+            self._writer.add_scalar(
                 k,
-                {
-                    "mean": float(metrics.mean),
-                    "std": float(metrics.std),
-                    "min": float(metrics.min),
-                    "max": float(metrics.max),
-                },
+                float(metrics.mean),
                 step,
             )
             result = v.result

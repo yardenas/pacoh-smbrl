@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import optax
 
 from smbrl.agents.models import ParamsDistribution
-from smbrl.utils import ensemble_predict
+from smbrl.utils import all_finite, ensemble_predict, update_if
 
 
 def meta_train(
@@ -73,6 +73,11 @@ def svgd(model, mll_fn, bandwidth, optimizer, opt_state, *, key=None):
     stein_grads = -(kxx @ score + kernel_grads) / num_particles
     stein_grads = reconstruct_tree(stein_grads.ravel())
     updates, new_opt_state = optimizer.update(stein_grads, opt_state)
+    all_ok = all_finite(stein_grads)
+    updates = update_if(
+        all_ok, updates, jax.tree_map(lambda x: jnp.zeros_like(x), updates)
+    )
+    new_opt_state = update_if(all_ok, new_opt_state, opt_state)
     new_model = optax.apply_updates(model, updates)
     return new_model, new_opt_state, log_probs.mean()
 
@@ -81,6 +86,20 @@ def _to_matrix(params, num_particles):
     flattened_params, reconstruct_tree = jax.flatten_util.ravel_pytree(params)  # type: ignore # noqa E501
     matrix = flattened_params.reshape((num_particles, -1))
     return matrix, reconstruct_tree
+
+
+# Based on tf-probability implementation of batched pairwise matrices:
+# https://github.com/tensorflow/probability/blob/f3777158691787d3658b5e80883fe1a933d48989/tensorflow_probability/python/math/psd_kernels/internal/util.py#L190
+def rbf_kernel(x, y, bandwidth=None):
+    row_norm_x = (x**2).sum(-1)[..., None]
+    row_norm_y = (y**2).sum(-1)[..., None, :]
+    pairwise = jnp.clip(row_norm_x + row_norm_y - 2.0 * jnp.matmul(x, y.T), 0.0)
+    bandwidth = bandwidth if bandwidth is not None else jnp.median(pairwise)
+    n_x = pairwise.shape[-2]
+    bandwidth = 0.5 * bandwidth / jnp.log(n_x + 1)
+    bandwidth = jnp.maximum(jax.lax.stop_gradient(bandwidth), 1e-5)
+    k_xy = jnp.exp(-pairwise / bandwidth)
+    return k_xy
 
 
 def meta_mll(
@@ -116,20 +135,6 @@ def meta_mll(
     return (mll + log_prob_prior).mean()
 
 
-# Based on tf-probability implementation of batched pairwise matrices:
-# https://github.com/tensorflow/probability/blob/f3777158691787d3658b5e80883fe1a933d48989/tensorflow_probability/python/math/psd_kernels/internal/util.py#L190
-def rbf_kernel(x, y, bandwidth=None):
-    row_norm_x = (x**2).sum(-1)[..., None]
-    row_norm_y = (y**2).sum(-1)[..., None, :]
-    pairwise = jnp.clip(row_norm_x + row_norm_y - 2.0 * jnp.matmul(x, y.T), 0.0)
-    bandwidth = bandwidth if bandwidth is not None else jnp.median(pairwise)
-    n_x = pairwise.shape[-2]
-    bandwidth = 0.5 * bandwidth / jnp.log(n_x + 1)
-    bandwidth = jnp.maximum(jax.lax.stop_gradient(bandwidth), 1e-5)
-    k_xy = jnp.exp(-pairwise / bandwidth)
-    return k_xy
-
-
 def mll(batch_x, batch_y, model, prior, prior_weight):
     y_hat, stddevs = jax.vmap(model)(batch_x)
     log_likelihood = (
@@ -141,22 +146,16 @@ def mll(batch_x, batch_y, model, prior, prior_weight):
 
 def infer_posterior(
     data,
-    hyper_posterior,
+    prior,
+    posterior,
     iterations,
-    n_prior_samples,
     learning_rate,
     key,
     prior_weight=1e-7,
     bandwidth=10.0,
 ):
-    # Sample model instances from the hyper-posterior to form an ensemble
-    # of neural networks.
-    models = jax.vmap(hyper_posterior.sample)(jax.random.split(key, n_prior_samples))
-    models = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), models)
-    # Marginalize over samples of each particle in the hyper-posterior.
-    prior = jax.tree_map(lambda x: x.mean(0), hyper_posterior)
     optimizer = optax.flatten(optax.adam(learning_rate))
-    opt_state = optimizer.init(models)
+    opt_state = optimizer.init(posterior)
     num_examples = data[0].shape[0]
 
     def update(carry, inputs):
@@ -176,9 +175,23 @@ def infer_posterior(
         return (model, opt_state), mll_value
 
     (posterior, _), mll_values = jax.lax.scan(
-        update, (models, opt_state), jnp.asarray(jax.random.split(key, iterations))
+        update, (posterior, opt_state), jnp.asarray(jax.random.split(key, iterations))
     )
     return posterior, mll_values
+
+
+def sample_prior_models(hyper_posterior, key, n_prior_samples):
+    # Sample model instances from the hyper-posterior to form an ensemble
+    # of neural networks.
+    model = jax.vmap(hyper_posterior.sample)(jax.random.split(key, n_prior_samples))
+    model = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), model)
+    return model
+
+
+def compute_prior(hyper_posterior):
+    # Marginalize over samples of each particle in the hyper-posterior.
+    prior = jax.tree_map(lambda x: x.mean(0), hyper_posterior)
+    return prior
 
 
 def make_hyper_prior(model):
