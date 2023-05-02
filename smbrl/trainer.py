@@ -2,7 +2,6 @@ import os
 from typing import Any, Iterable, List, Optional
 
 import cloudpickle
-import numpy as np
 from omegaconf import DictConfig
 
 from smbrl import acting, agents, episodic_async_env, logging, utils
@@ -17,6 +16,7 @@ class Trainer:
         task_sampler: TaskSampler,
         agent: Optional[Agent] = None,
         start_epoch: int = 0,
+        step: int = 0,
         seeds: Optional[List[int]] = None,
     ):
         self.config = config
@@ -24,6 +24,7 @@ class Trainer:
         self.make_env = make_env
         self.tasks_sampler = task_sampler
         self.epoch = start_epoch
+        self.step = step
         self.seeds = seeds
         self.logger: Optional[logging.TrainingLogger] = None
         self.state_writer: Optional[logging.StateWriter] = None
@@ -68,22 +69,23 @@ class Trainer:
                 train=True,
                 episodes_per_task=self.config.training.episodes_per_task,
                 prefix="train",
-                epoch=epoch,
             )
             if (epoch + 1) % self.config.training.eval_every == 0:
                 print("Evaluating...")
                 self._step(
                     train=False,
                     episodes_per_task=self.config.training.eval_episodes_per_task,
-                    prefix="eval",
-                    epoch=epoch,
+                    prefix="evaluate",
                 )
             self.epoch = epoch + 1
             state_writer.write(self.state)
         logger.flush()
 
     def _step(
-        self, train: bool, episodes_per_task: int, prefix: str, epoch: int
+        self,
+        train: bool,
+        episodes_per_task: int,
+        prefix: str,
     ) -> None:
         config, agent, env, logger = self.config, self.agent, self.env, self.logger
         assert env is not None and agent is not None and logger is not None
@@ -91,23 +93,18 @@ class Trainer:
         adaptation_episodes = (
             episodes_per_task if train else config.training.adaptation_budget
         )
-        step = (
-            epoch
-            * config.training.episodes_per_task
-            * config.training.action_repeat
-            * config.training.time_limit
-            * config.training.parallel_envs
-        )
-        summary = acting.epoch(
+        summary, step = acting.epoch(
             agent,
             env,
             self.tasks(train=train),
             episodes_per_task,
             adaptation_episodes,
             train,
-            step,
+            self.step,
             render_episodes,
         )
+        if train:
+            self.step = step
         objective, cost_rate, feasibilty = summary.metrics
         logger.log_summary(
             {
@@ -115,16 +112,16 @@ class Trainer:
                 f"{prefix}/cost_rate": cost_rate,
                 f"{prefix}/feasibility": feasibilty,
             },
-            step,
+            self.step,
         )
         if render_episodes > 0:
             logger.log_video(
-                np.asarray(summary.videos)[0].swapaxes(0, 1)[:5],
-                step,
+                summary.videos[: config.training.parallel_envs],
+                self.step,
                 "video",
                 30 / config.training.action_repeat,
             )
-        logger.log_metrics(step)
+        logger.log_metrics(self.step)
 
     def get_env_random_state(self):
         assert self.env is not None
@@ -147,7 +144,9 @@ class Trainer:
     def from_pickle(cls, config: DictConfig) -> "Trainer":
         log_path = config.log_dir
         with open(os.path.join(log_path, "state.pkl"), "rb") as f:
-            make_env, env_rs, agent, epoch, task_sampler = cloudpickle.load(f).values()
+            make_env, env_rs, agent, epoch, step, task_sampler = cloudpickle.load(
+                f
+            ).values()
         print(f"Resuming experiment from: {log_path}...")
         assert agent.config == config, "Loaded different hyperparameters."
         return cls(
@@ -166,5 +165,6 @@ class Trainer:
             "env_rs": self.get_env_random_state(),
             "agent": self.agent,
             "epoch": self.epoch,
+            "step": self.step,
             "task_sampler": self.tasks_sampler,
         }

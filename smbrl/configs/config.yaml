@@ -1,13 +1,13 @@
 defaults:
   - _self_
   - agent: smbrl
-  - environment: pendulum_all
+  - environment: pendulum_direction
 
 hydra:
   run:
     dir: ${log_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
-    dir: ${log_dir}/${hydra.job_num}-${hydra.job.name}
+    dir: ${log_dir}/${hydra.job.name}
     subdir: ${hydra.job.override_dirname}
   job:
     config:
@@ -22,7 +22,7 @@ training:
   safe: True
   cost_limit: 25
   seed: 0
-  time_limit: 200
+  time_limit: 1000
   episodes_per_task: 10
   eval_episodes_per_task: 10
   adaptation_budget: 1
@@ -34,4 +34,4 @@ training:
   parallel_envs: 20
   task_batch_size: 20
   scale_reward: 1.
-  num_tasks:
+  num_tasks: 20

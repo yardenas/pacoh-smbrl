@@ -204,11 +204,17 @@ def test_training():
         plot_prior(*next(train_iter), priors)
     (context_x, context_y), (test_x, test_y) = next(data_generating_process.test_set)
     key, key_next = jax.random.split(key)
-    infer_posteriors = lambda x, y: pacoh.infer_posterior(
-        (x, y), hyper_posterior, 500, 5, 3e-4, key_next, 1e-7, 1000
+    # Sample ensemble of models per task.
+    model = jax.vmap(
+        pacoh.sample_prior_models,
+        (None, 0, None),
+    )(hyper_posterior, jnp.asarray(jax.random.split(key_next, context_x.shape[0])), 5)
+    prior = pacoh.compute_prior(hyper_posterior)
+    infer_posteriors = lambda m, x, y: pacoh.infer_posterior(
+        (x, y), prior, m, 500, 3e-4, key_next, 1e-7, 1000
     )
-    infer_posteriors = jax.jit(jax.vmap(infer_posteriors, 1))
-    posteriors, _ = infer_posteriors(context_x[None], context_y[None])
+    infer_posteriors = jax.jit(jax.vmap(infer_posteriors, (0, 1, 1)))
+    posteriors, _ = infer_posteriors(model, context_x[None], context_y[None])
     predict_tasks = jax.vmap(predict)
     predictions = predict_tasks(posteriors, test_x)
     plot(context_x, context_y, test_x, test_y, predictions)

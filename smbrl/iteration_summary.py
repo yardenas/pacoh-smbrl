@@ -41,7 +41,8 @@ class IterationSummary:
             for trajectory in trajectory_batch:
                 if len(trajectory.frames) > 0:
                     all_vids.append(trajectory.frames)
-        return all_vids
+        vids = np.asarray(all_vids)[-1].swapaxes(0, 1)
+        return vids
 
     def extend(self, samples: List[Trajectory]) -> None:
         self._data.append(samples)

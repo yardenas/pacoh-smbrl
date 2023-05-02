@@ -45,7 +45,8 @@ def interact(
         unit=f"Episode (✕ {environment.num_envs} parallel)",
     ) as pbar:
         while episode_count < num_episodes:
-            if render_episodes:
+            render = episode_count >= adaptation_episodes - 1 and render_episodes
+            if render:
                 trajectory.frames.append(environment.render())
             actions = agent(observations)
             next_observations, rewards, done, infos = environment.step(actions)
@@ -59,7 +60,8 @@ def interact(
             )
             trajectory.transitions.append(transition)
             observations = next_observations
-            if done.all():
+            if done.any():
+                assert done.all()
                 np_trajectory = trajectory.as_numpy()
                 step += int(np.prod(np_trajectory.reward.shape))
                 if train:
@@ -70,7 +72,8 @@ def interact(
                     np_trajectory, agent.logger, step, "train" if train else "evaluate"
                 )
                 pbar.set_postfix({"reward": reward, "cost": cost})
-                render_episodes = max(render_episodes - 1, 0)
+                if render:
+                    render_episodes = max(render_episodes - 1, 0)
                 episodes.append(trajectory)
                 trajectory = Trajectory()
                 pbar.update(1)
@@ -88,7 +91,7 @@ def epoch(
     train: bool,
     step: int,
     render_episodes: int = 0,
-) -> IterationSummary:
+) -> tuple[IterationSummary, int]:
     summary = IterationSummary()
     batches = list(grouper(tasks, env.num_envs))
     for batch in batches:
@@ -105,4 +108,4 @@ def epoch(
         )
         agent.reset()
         summary.extend(samples)
-    return summary
+    return summary, step
