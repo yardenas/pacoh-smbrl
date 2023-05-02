@@ -5,7 +5,6 @@ import jax.numpy as jnp
 
 from smbrl.types import RolloutFn
 
-SSM = tuple[jax.Array, jax.Array, jax.Array]
 ObjectiveFn = Callable[[jax.Array], jax.Array]
 
 
