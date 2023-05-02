@@ -12,7 +12,7 @@ from smbrl import metrics as m
 from smbrl.agents import cem
 from smbrl.agents import pacoh_nn as pch
 from smbrl.agents.base import AgentBase
-from smbrl.agents.models import Model
+from smbrl.agents.models import FeedForwardModel
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
@@ -48,7 +48,7 @@ def buffer_factory(
 
 @eqx.filter_jit
 def policy(
-    model: Model,
+    model: FeedForwardModel,
     observation: jax.Array,
     horizon: int,
     init_guess: jax.Array,
@@ -84,14 +84,14 @@ def policy(
 @eqx.filter_jit
 def infer_posterior_per_task(
     data: Data,
-    prior: Model,
-    posterior: Model,
+    prior: FeedForwardModel,
+    posterior: FeedForwardModel,
     update_steps: int,
     learning_rate: float,
     key: jax.random.KeyArray,
     prior_weight: float,
     bandwidth: float,
-) -> tuple[Model, jax.Array]:
+) -> tuple[FeedForwardModel, jax.Array]:
     def infer_posterior(data, posterior):
         posterior, logprobs = pch.infer_posterior(
             data,
@@ -140,7 +140,7 @@ class ASMBRL(AgentBase):
             config.training.adaptation_budget,
             config.agent.replay_buffer.batch_size,
         )
-        model_factory = lambda key: Model(
+        model_factory = lambda key: FeedForwardModel(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
             key=key,
@@ -243,7 +243,7 @@ class ASMBRL(AgentBase):
 class PACOHLearner:
     def __init__(
         self,
-        model_factory: Callable[[jax.random.KeyArray], Model],
+        model_factory: Callable[[jax.random.KeyArray], FeedForwardModel],
         key: jax.random.KeyArray,
         config: DictConfig,
     ):
@@ -285,13 +285,13 @@ class PACOHLearner:
     def infer_posteriors(
         self,
         data: Data,
-        posterior: Model,
+        posterior: FeedForwardModel,
         update_steps: int,
         learning_rate: float,
         key: jax.random.KeyArray,
         prior_weight: float,
         bandwidth: float,
-    ) -> Model:
+    ) -> FeedForwardModel:
         return infer_posterior_per_task(
             data,
             self.prior,
@@ -305,7 +305,7 @@ class PACOHLearner:
 
     def sample_prior(
         self, key: jax.random.KeyArray, n_prior_samples: int, task_batch_size: int
-    ) -> Model:
+    ) -> FeedForwardModel:
         model = jax.vmap(pch.sample_prior_models, (None, 0, None))(
             self.hyper_posterior,
             jax.random.split(key, task_batch_size),

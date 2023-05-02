@@ -23,7 +23,7 @@ def prepare_data(replay_buffer, num_steps):
 
 def simple_regression(
     data: types.Data,
-    model: m.Model,
+    model: types.Model,
     learner: Learner,
     opt_state: OptState,
     key: jax.random.KeyArray,
