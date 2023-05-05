@@ -1,12 +1,13 @@
 # type: ignore
-import importlib
-
 import jax
 import numpy as np
 import pytest
 from hydra import compose, initialize
 
 from smbrl import acting, tasks
+from smbrl.agents.asmbrl import ASMBRL
+from smbrl.agents.fsmbrl import fSMBRL
+from smbrl.agents.smbrl import SMBRL
 from smbrl.trainer import Trainer
 from smbrl.trajectory import TrajectoryData
 from smbrl.utils import ensemble_predict, normalize
@@ -71,6 +72,27 @@ def asmbrl_predictions(agent, horizon):
     return mean_step, mean_sample
 
 
+def fsmbrl_predicitions(agent, horizon):
+    ssm = agent.model.ssm
+    hidden_state = agent.model.init_state
+
+    def unroll_step(observation, action):
+        def f(carry, x):
+            prev_hidden = carry
+            state, action = x
+            hidden, out = agent.model.step(state, action, ssm, prev_hidden)
+            return hidden, out
+
+        return jax.lax.scan(f, hidden_state, (observation, action))[1]
+
+    step = jax.vmap(jax.vmap(unroll_step))
+    sample = lambda obs, acs: agent.model.sample(
+        horizon, obs, jax.random.PRNGKey(0), acs, ssm, hidden_state
+    )
+    vmaped_sample = jax.vmap(jax.vmap(sample))
+    return step, vmaped_sample
+
+
 NUM_TASKS = 5
 
 COMMON = [
@@ -79,6 +101,7 @@ COMMON = [
     f"training.parallel_envs={NUM_TASKS}",
     "training.render_episodes=0",
     "training.scale_reward=0.1",
+    "training.time_limit=100",
     "agent.replay_buffer.num_shots=1",
 ]
 
@@ -90,23 +113,30 @@ ASMBRL_CFG = [
     "agent.posterior.update_steps=100",
 ] + COMMON
 
+FSMBRL_CFG = [
+    "agent=fsmbrl",
+    "agent.update_steps=100",
+    "agent.model.n_layers=1",
+    "agent.model.hidden_size=32",
+    "agent.model.hippo_n=4",
+] + COMMON
+
 
 @pytest.mark.parametrize(
-    "agent, pred_fn_factory, overrides",
+    "pred_fn_factory, overrides, agent_class",
     [
-        ("asmbrl", asmbrl_predictions, ASMBRL_CFG),
-        ("smbrl", smbrl_predictions, SMBRL_CFG),
+        (asmbrl_predictions, ASMBRL_CFG, ASMBRL),
+        (smbrl_predictions, SMBRL_CFG, SMBRL),
+        (fsmbrl_predicitions, FSMBRL_CFG, fSMBRL),
     ],
-    ids=["asmbrl", "smbrl"],
+    ids=["asmbrl", "smbrl", "fsmbrl"],
 )
-def test_model_learning(agent, pred_fn_factory, overrides):
+def test_model_learning(pred_fn_factory, overrides, agent_class):
     with initialize(version_base=None, config_path="../smbrl/configs"):
         cfg = compose(config_name="config", overrides=overrides)
     make_env, task_sampler = tasks.make(cfg)
     with Trainer(cfg, make_env, task_sampler) as trainer:
         assert trainer.agent is not None and trainer.env is not None
-        agent_module = importlib.import_module(f"smbrl.agents.{agent}")
-        agent_class = getattr(agent_module, agent.upper())
         rs = np.random.RandomState(0)
         agent_class.__call__ = lambda self, observation: np.tile(
             rs.uniform(-1.0, 1.0, trainer.env.action_space.shape),
