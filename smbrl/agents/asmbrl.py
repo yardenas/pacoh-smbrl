@@ -195,7 +195,9 @@ class ASMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        data = ml.prepare_data(self.slow_buffer, self.config.agent.pacoh.num_examples)
+        data = ml.sample_and_prepare_data(
+            self.slow_buffer, self.config.agent.pacoh.num_examples
+        )
         pacoh_cfg = self.config.agent.pacoh
         logprobs = self.pacoh_learner.update_hyper_posterior(
             data,
@@ -215,7 +217,7 @@ class ASMBRL(AgentBase):
             self.config.training.scale_reward,
         )
         posterior_cfg = self.config.agent.posterior
-        data = ml.prepare_data(self.fast_buffer, posterior_cfg.num_examples)
+        data = ml.sample_and_prepare_data(self.fast_buffer, posterior_cfg.num_examples)
         self.model, logprobs = self.pacoh_learner.infer_posteriors(
             data,
             self.model,

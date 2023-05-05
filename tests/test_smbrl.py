@@ -12,7 +12,11 @@ from smbrl.trajectory import TrajectoryData
 from smbrl.utils import ensemble_predict, normalize
 
 
-@pytest.mark.parametrize("agent", ["asmbrl", "smbrl"], ids=["asmbrl", "smbrl"])
+@pytest.mark.parametrize(
+    "agent",
+    ["asmbrl", "smbrl", "fsmbrl"],
+    ids=["asmbrl", "smbrl", "fsmbrl"],
+)
 def test_training(agent):
     with initialize(version_base=None, config_path="../smbrl/configs"):
         cfg = compose(

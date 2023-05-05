@@ -214,9 +214,7 @@ class SequenceBlock(eqx.Module):
         def wrapper(self, x, *args, **kwargs):
             skip = x
             if x.ndim > 1:
-                norm, out, out2 = jax.tree_map(
-                    jax.vmap, (self.norm, self.out, self.out2)
-                )
+                norm, out, out2 = map(jax.vmap, (self.norm, self.out, self.out2))
             else:
                 norm, out, out2 = self.norm, self.out, self.out2
             x = norm(x)

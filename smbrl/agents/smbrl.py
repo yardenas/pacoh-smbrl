@@ -13,14 +13,14 @@ from smbrl.agents.models import FeedForwardModel
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
-from smbrl.types import FloatArray
-from smbrl.utils import Learner, add_to_buffer, normalize
+from smbrl.types import FloatArray, RolloutFn
+from smbrl.utils import Count, Learner, add_to_buffer, normalize
 
 
 @eqx.filter_jit
 def policy(
     observation: jax.Array,
-    model: FeedForwardModel,
+    sample: RolloutFn,
     horizon: int,
     init_guess: jax.Array,
     key: jax.random.KeyArray,
@@ -29,7 +29,7 @@ def policy(
     # vmap over batches of observations (e.g., solve cem separately for
     # each individual environment)
     cem_per_env = jax.vmap(
-        lambda o: cem.policy(o, model.sample, horizon, init_guess, key, cem_config)
+        lambda o: cem.policy(o, sample, horizon, init_guess, key, cem_config)
     )
     return cem_per_env(observation)
 
@@ -64,31 +64,34 @@ class SMBRL(AgentBase):
             **config.agent.model,
         )
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
+        self.replan = Count(config.agent.replan_every)
+        self.plan = np.zeros(
+            (config.training.parallel_envs, config.agent.plan_horizon)
+            + action_space.shape
+        )
 
     def __call__(
         self,
         observation: FloatArray,
     ) -> FloatArray:
-        # Algorithm sketch:
-        # 1. Normalize observation
-        # 2. If step mode N == 0:
-        # 3.   update_policy (non-blocking/async, dispatch to a thread).
-        #      Can use splines to make CEM search space better on longer horizons.
-        # 4. get action from current policy.
-        normalized_obs = normalize(
-            observation, self.obs_normalizer.result.mean, self.obs_normalizer.result.std
-        )
-        horizon = self.config.agent.plan_horizon
-        init_guess = jnp.zeros((horizon, self.replay_buffer.action.shape[-1]))
-        action = policy(
-            normalized_obs,
-            self.model,
-            horizon,
-            init_guess,
-            next(self.prng),
-            self.config.agent.cem,
-        )[:, 0]
-        return np.asarray(action)
+        if self.replan():
+            normalized_obs = normalize(
+                observation,
+                self.obs_normalizer.result.mean,
+                self.obs_normalizer.result.std,
+            )
+            horizon = self.config.agent.plan_horizon
+            init_guess = jnp.zeros((horizon, self.replay_buffer.action.shape[-1]))
+            action = policy(
+                normalized_obs,
+                self.model.sample,
+                horizon,
+                init_guess,
+                next(self.prng),
+                self.config.agent.cem,
+            )
+            self.plan = np.asarray(action)
+        return self.plan[:, self.replan.count]
 
     def observe(self, trajectory: TrajectoryData) -> None:
         self.obs_normalizer.update_state(
@@ -107,12 +110,13 @@ class SMBRL(AgentBase):
         self.update_model()
 
     def update_model(self):
-        x, y = ml.prepare_data(self.replay_buffer, self.config.agent.update_steps)
+        x, y = ml.sample_and_prepare_data(
+            self.replay_buffer, self.config.agent.update_steps
+        )
         (self.model, self.model_learner.state), loss = ml.simple_regression(
             (x, y),
             self.model,
             self.model_learner,
             self.model_learner.state,
-            next(self.prng),
         )
         self.logger["agent/model/loss"] = float(loss.mean())

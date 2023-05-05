@@ -77,4 +77,9 @@ class Prediction(NamedTuple):
     reward_stddev: Optional[jax.Array] = None
 
 
+class Moments(NamedTuple):
+    mean: jax.Array
+    stddev: Optional[jax.Array] = None
+
+
 RolloutFn = Callable[[int, jax.Array, jax.random.KeyArray, jax.Array], Prediction]
