@@ -1,3 +1,5 @@
+from typing import NamedTuple, Optional, no_type_check
+
 import equinox as eqx
 import jax
 import jax.nn as jnn
@@ -133,7 +135,7 @@ class S4Cell(eqx.Module):
     c: jax.Array
     d: jax.Array
     step: jax.Array
-    sequence_length: int
+    sequence_length: int = eqx.static_field()
 
     def __init__(self, hippo_n, input_size, sequnece_length, *, key):
         hippo_params = hippo_initializer(hippo_n)
@@ -195,12 +197,36 @@ class S4Cell(eqx.Module):
         return jnp.zeros_like(self.b)
 
 
+class SSMOuts(NamedTuple):
+    y: jax.Array
+    hidden: Optional[jax.Array] = None
+
+
 class SequenceBlock(eqx.Module):
     cell: S4Cell
     out: eqx.nn.Linear
     out2: eqx.nn.Linear
     norm: eqx.nn.LayerNorm
     hippo_n: int
+
+    @no_type_check
+    def encode_decode(fn):
+        def wrapper(self, x, *args, **kwargs):
+            skip = x
+            if x.ndim > 1:
+                norm, out, out2 = jax.tree_map(
+                    jax.vmap, (self.norm, self.out, self.out2)
+                )
+            else:
+                norm, out, out2 = self.norm, self.out, self.out2
+            x = norm(x)
+            outs = fn(self, x, *args, **kwargs)
+            x = jnn.gelu(outs.y)
+            x = out(x) * jnn.sigmoid(out2(x))
+            y = skip + x
+            return SSMOuts(y, outs.hidden)
+
+        return wrapper
 
     def __init__(self, hidden_size, hippo_n, sequence_length, *, key):
         cell_key, encoder_key, decoder_key = jax.random.split(key, 3)
@@ -212,22 +238,13 @@ class SequenceBlock(eqx.Module):
         )
         self.hippo_n = hippo_n
 
-    def __call__(self, x, ssm, hidden, convolve=False, *, key=None):
-        skip = x
-        x = jax.vmap(self.norm)(x)
-        if convolve:
-            # Heuristically use FFT for very long sequence lengthes
-            pred_fn = lambda x: self.cell.convolve(
-                x, True if x.shape[0] > 16 else False
-            )
-        else:
-            fn = lambda carry, x: self.cell(carry, x, ssm)
-            pred_fn = lambda x: jax.lax.scan(fn, hidden, x)
-        if convolve:
-            x = pred_fn(x)
-            hidden = None
-        else:
-            hidden, x = pred_fn(x)
-        x = jnn.gelu(x)
-        x = jax.vmap(self.out)(x) * jnn.sigmoid(jax.vmap(self.out2)(x))
-        return hidden, skip + x
+    @encode_decode
+    def convolve(self, x):
+        # Heuristically use FFT for very long sequence lengthes
+        y = self.cell.convolve(x, True if x.shape[0] > 16 else False)
+        return SSMOuts(y)
+
+    @encode_decode
+    def step(self, x, ssm, hidden):
+        hidden, y = self.cell(hidden, x, ssm)
+        return SSMOuts(y, hidden)
