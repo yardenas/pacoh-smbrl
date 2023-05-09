@@ -101,22 +101,32 @@ def main(
     plot(y, y_hat, context)
 
 
-def sample(model, horizon, initial_state, inputs):
-    ssms = [layer.cell.ssm for layer in model.layers]
+def sample(model, context, initial_state, inputs):
+    ssm = model.ssm
 
-    def f(carry, x):
-        i, carry, prev_x = carry
-        if x is None:
-            x = prev_x
-        else:
-            prev_x = jnp.concatenate([prev_x[:3], x[-1:]], axis=-1)
-            x = jnp.where(i >= horizon, prev_x, x)
-        state, action = jnp.split(x, [model.decoder.out_features - 1], -1)
-        out_carry, out = model.step(state, action, ssms, carry)
-        out = jnp.concatenate([out.next_state, out.reward[..., None]], axis=-1)
-        return (i + 1, out_carry, out), out
+    def unroll_step(initial_state, inputs):
+        def f(carry, x):
+            prev_hidden = carry
+            state, action = jnp.split(x, [model.decoder.out_features - 1], -1)
+            hidden, out = model.step(state, action, ssm, prev_hidden)
+            out = jnp.concatenate([out.next_state, out.reward[..., None]], axis=-1)
+            return hidden, out
 
-    _, out = jax.lax.scan(f, (0,) + initial_state, inputs)
+        return jax.lax.scan(f, initial_state, inputs)
+
+    hidden, out_context = unroll_step(initial_state[0], inputs[:context])
+    states, actions = jnp.split(inputs, [model.decoder.out_features - 1], -1)
+    states, actions = jax.tree_map(lambda x: x[context:], (states, actions))
+    out = model.sample(
+        inputs.shape[0] - context,
+        states[0],
+        jax.random.PRNGKey(0),
+        actions,
+        ssm,
+        hidden,
+    )
+    out = jnp.concatenate([out.next_state, out.reward[..., None]], axis=-1)
+    out = jnp.concatenate([out_context, out], axis=0)
     return out
 
 
