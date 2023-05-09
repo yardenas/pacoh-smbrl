@@ -175,7 +175,6 @@ class S4Model(eqx.Module):
         x = x[None]
         out_hiddens = []
         for layer, ssm, hidden in zip(self.layers, layers_ssm, layers_hidden):
-            # x, hidden = layer(x, ssm=ssm, hidden=hidden)
             hidden, x = layer(x, ssm=ssm, hidden=hidden)
             out_hiddens.append(hidden)
         outs = self.decoder(x[0])

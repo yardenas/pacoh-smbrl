@@ -19,6 +19,8 @@ from smbrl.trajectory import TrajectoryData
 from smbrl.types import Data, FloatArray
 from smbrl.utils import Count, Learner, add_to_buffer, ensemble_predict, normalize
 
+pacoh_regression = eqx.filter_jit(ml.pacoh_regression)
+
 
 def buffer_factory(
     buffer_type,
@@ -270,7 +272,7 @@ class PACOHLearner:
         prior_weight: float,
         bandwidth: float,
     ) -> jax.Array:
-        (self.hyper_posterior, self.learner.state), logprobs = ml.pacoh_regression(
+        (self.hyper_posterior, self.learner.state), logprobs = pacoh_regression(
             data,
             self.hyper_prior,
             self.hyper_posterior,

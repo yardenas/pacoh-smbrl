@@ -26,7 +26,7 @@ def dataloader(arrays, batch_size, *, key):
             end = start + batch_size
 
 
-def get_data(data_path, sequence_length):
+def get_data(data_path, sequence_length, split=slice(0, None)):
     obs, action, reward = np.load(data_path).values()
     obs, action, reward = [x.reshape(-1, *x.shape[2:]) for x in (obs, action, reward)]
 
@@ -40,10 +40,10 @@ def get_data(data_path, sequence_length):
     reward, *_ = normalize(reward)
     all_obs, all_next_obs, all_acs, all_rews = [], [], [], []
     for t in range(action.shape[1] - sequence_length):
-        all_obs.append(obs[:, t : t + sequence_length])
-        all_next_obs.append(obs[:, t + 1 : t + sequence_length + 1])
-        all_rews.append(reward[:, t : t + sequence_length])
-        all_acs.append(action[:, t : t + sequence_length])
+        all_obs.append(obs[split, t : t + sequence_length])
+        all_next_obs.append(obs[split, t + 1 : t + sequence_length + 1])
+        all_rews.append(reward[split, t : t + sequence_length])
+        all_acs.append(action[split, t : t + sequence_length])
     obs, next_obs, acs, rews = map(
         lambda x: np.concatenate(x, axis=0), (all_obs, all_next_obs, all_acs, all_rews)  # type: ignore # noqa: E501
     )
@@ -54,14 +54,14 @@ def main(
     data_path="data-200-multi.npz",
     batch_size=32,
     learning_rate=1e-3,
-    steps=500,
+    steps=1,
     hidden_size=128,
     sequence_length=84,
     seed=777,
 ):
     loader_key, model_key = jax.random.split(jax.random.PRNGKey(seed), 2)
-    data = get_data(data_path, sequence_length)
-    iter_data = dataloader(data, batch_size, key=loader_key)
+    train_data = get_data(data_path, sequence_length, slice(0, 350))
+    iter_data = dataloader(train_data, batch_size, key=loader_key)
 
     model = models.S4Model(
         state_dim=3,
@@ -93,6 +93,8 @@ def main(
         loss, model, opt_state = make_step(model, x, y, opt_state)
         loss = loss.item()
         print(f"step={step}, loss={loss}")
+    test_data = get_data(data_path, sequence_length, slice(350, None))
+    iter_data = dataloader(test_data, batch_size, key=loader_key)
     x, y = next(iter_data)
     context = 25
     hidden = [np.tile(x, (batch_size, 1, 1)) for x in model.init_state]
