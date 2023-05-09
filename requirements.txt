@@ -13,7 +13,7 @@ decorator==4.4.2
 Deprecated==1.2.13
 distrax==0.1.3
 dm-tree==0.1.8
-equinox==0.10.1
+equinox==0.10.3
 exceptiongroup==1.1.1
 flatbuffers==23.3.3
 fonttools==4.39.3
