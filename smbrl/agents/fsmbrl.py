@@ -47,11 +47,12 @@ class fSMBRL(AgentBase):
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
             key=next(self.prng),
-            sequence_length=config.training.time_limit,
+            sequence_length=config.agent.replay_buffer.sequence_length
+            // config.training.action_repeat,
             **config.agent.model,
         )
         self.model_learner = Learner(
-            eqx.filter(self.model, eqx.is_inexact_array),
+            self.model,
             config.agent.model_optimizer,
         )
         self.replan = Count(config.agent.replan_every)

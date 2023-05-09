@@ -84,7 +84,7 @@ class FeedForwardModel(eqx.Module):
             return out.next_state, out
 
         init = initial_state
-        inputs = (action_sequence, jax.random.split(key, horizon))
+        inputs = (action_sequence, jax.random.split(key, action_sequence.shape[0]))
         _, out = jax.lax.scan(
             f,
             init,
@@ -159,7 +159,7 @@ class S4Model(eqx.Module):
     ) -> Moments:
         x = jax.vmap(self.encoder)(x)
         for layer in self.layers:
-            x = layer.convolve(x)[0]
+            x = layer(x, convolve=True)[1]
         outs = jax.vmap(self.decoder)(x)
         return Moments(outs)
 
@@ -172,11 +172,13 @@ class S4Model(eqx.Module):
     ) -> tuple[list[jax.Array], Prediction]:
         x = to_ins(state, action)
         x = self.encoder(x)
+        x = x[None]
         out_hiddens = []
         for layer, ssm, hidden in zip(self.layers, layers_ssm, layers_hidden):
-            x, hidden = layer.step(x, ssm, hidden)
+            # x, hidden = layer(x, ssm=ssm, hidden=hidden)
+            hidden, x = layer(x, ssm=ssm, hidden=hidden)
             out_hiddens.append(hidden)
-        outs = self.decoder(x)
+        outs = self.decoder(x[0])
         state, reward = jnp.split(
             outs, [self.decoder.out_features - 1], -1  # type: ignore
         )
@@ -186,7 +188,7 @@ class S4Model(eqx.Module):
         self,
         horizon: int,
         initial_state: jax.Array,
-        key,
+        key: jax.random.KeyArray,
         action_sequence: jax.Array,
         layers_ssm: list[SSM],
         layers_hidden: list[jax.Array],
@@ -202,6 +204,7 @@ class S4Model(eqx.Module):
             )
             return (out_hidden, out.next_state), out
 
+        assert horizon == action_sequence.shape[0]
         assert all(x.ndim == 2 for x in layers_hidden)
         init = (layers_hidden, initial_state)
         inputs = (action_sequence, jax.random.split(key, horizon))
