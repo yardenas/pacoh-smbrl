@@ -146,7 +146,7 @@ def mll(batch_x, batch_y, model, prior, prior_weight):
         distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(batch_y).mean()
     )
     log_prior = prior.log_prob(model)
-    return log_likelihood + log_prior * prior_weight
+    return log_likelihood.mean() + log_prior * prior_weight
 
 
 def infer_posterior(

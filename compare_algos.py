@@ -1,3 +1,6 @@
+import argparse
+import os
+from collections import OrderedDict
 from itertools import cycle
 
 import equinox as eqx
@@ -15,10 +18,13 @@ from smbrl.utils import Learner, PRNGSequence, ensemble_predict
 ACTION_SPACE_DIM = 1
 OBSERVATION_SPACE_DIM = 3
 BATCH_SIZE = 32
-CONTEXT = 12
+CONTEXT = 24
 SEQUENCE_LENGTH = 84
 
-KEY = PRNGSequence(0)
+
+SEED = 102
+
+KEY = PRNGSequence(SEED)
 
 
 def split_obs_acs(x):
@@ -54,12 +60,11 @@ class PACOHLearner:
             dict(
                 agent=dict(
                     pacoh=dict(
-                        num_examples=100,
                         n_particles=3,
-                        posterior_stddev=0.01,
+                        posterior_stddev=0.5,
                         n_prior_samples=5,
-                        prior_weight=1e-4,
-                        bandwidth=1000.0,
+                        prior_weight=1e-3,
+                        bandwidth=10.0,
                     ),
                     model_optimizer=dict(lr=1e-3),
                 )
@@ -83,10 +88,10 @@ class PACOHLearner:
         return -logprobs
 
     def adapt(self, data):
-        train_steps = 100
+        train_steps = 250
         train_data = tuple(map(lambda x: np.repeat(x[None], train_steps, axis=0), data))
         self.posterior, _ = self.learner.infer_posteriors(
-            train_data, self.posterior, train_steps, 3e-4, next(KEY), 1e-7, 1000.0
+            train_data, self.posterior, train_steps, 3e-4, next(KEY), 1e-3, 10.0
         )
 
     def predict(self, x):
@@ -238,7 +243,7 @@ def get_data(data_path, sequence_length, split=slice(0, None)):
     return obs, next_obs, acs, rews
 
 
-def plot(context, y, y_hat, context_t):
+def plot(context, y, y_hat, context_t, savename):
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -271,12 +276,33 @@ def plot(context, y, y_hat, context_t):
         ax.spines["right"].set_visible(False)
         ax.axvline(context_t, color="k", linestyle="--", linewidth=1.0)
     plt.tight_layout()
+    plt.savefig(savename, bbox_inches="tight")
     plt.show(block=False)
-    plt.pause(5)
+    plt.pause(10)
     plt.close()
 
 
+def make_dir(name):
+    script_dir = os.path.dirname(__file__)
+    results_dir = os.path.join(script_dir, name)
+    if not os.path.isdir(results_dir):
+        os.makedirs(results_dir)
+    return results_dir
+
+
+def save_results(path, data):
+    np.savez(path, **data)
+
+
+class LastUpdatedOrderedDict(OrderedDict):
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+
+
 def run_algo(learner, train_data, test_data, steps):
+    result_dir = make_dir(learner.__class__.__name__)
+    results = LastUpdatedOrderedDict()
     test_data = cycle(iter(test_data))
     for step, batch in zip(range(steps), train_data):
         loss = learner.train_step(batch)
@@ -284,20 +310,38 @@ def run_algo(learner, train_data, test_data, steps):
         print(f"step={step}, loss={loss}")
         if step % 100 == 0:
             context, (x, y) = split_context(*next(test_data), CONTEXT)
-            mse = learner.adapt(context)
+            learner.adapt(context)
             y_hat = learner.predict(x)
-            mse = l2_loss(y_hat, y).mean()
-            print(f"MSE={mse.item()}")
-            plot(context[1], y, y_hat, CONTEXT)
+            mse = l2_loss(y_hat, y).mean().item()
+            print(f"MSE={mse}")
+            results[str(step)] = {
+                "mse": mse,
+                "context": context,
+                "y": y,
+                "y_hat": y_hat,
+            }
+            plot(
+                context[1],
+                y,
+                y_hat,
+                CONTEXT,
+                str(os.path.join(result_dir, f"{step}.png")),
+            )
+    save_results(os.path.join(result_dir, f"results_{SEED}"), results)
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--algo", default="pacoh", choices=["pacoh", "s4", "vanilla"])
+    args = parser.parse_args()
+    learner = dict(pacoh=PACOHLearner, s4=S4Learner, vanilla=VanillaLearner)[
+        args.algo
+    ]()
     train_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(0, 150))
-    train_loader = dataloader(train_data, BATCH_SIZE, key=next(KEY))
+    train_loader = dataloader(train_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
     test_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(150, None))
-    test_loader = dataloader(test_data, BATCH_SIZE, key=next(KEY))
-    for learner in [PACOHLearner()]:
-        run_algo(learner, train_loader, test_loader, 1000)
+    test_loader = dataloader(test_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
+    run_algo(learner, train_loader, test_loader, 1000)
 
 
 if __name__ == "__main__":
