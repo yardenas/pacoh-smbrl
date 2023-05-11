@@ -24,8 +24,11 @@ def meta_train(
         hyper_posterior, opt_state = carry
         key = inputs
         key, next_key = jax.random.split(key)
-        ids = jax.random.choice(next_key, num_examples)
-        meta_batch_x, meta_batch_y = jax.tree_map(lambda x: x[ids], data)
+        if num_examples > 1:
+            ids = jax.random.choice(next_key, num_examples)
+            meta_batch_x, meta_batch_y = jax.tree_map(lambda x: x[ids], data)
+        else:
+            meta_batch_x, meta_batch_y = jax.tree_map(lambda x: x[0], data)
         # vmap to compute the grads for each svgd particle.
         mll_fn = jax.vmap(
             jax.value_and_grad(
@@ -46,6 +49,8 @@ def meta_train(
         return (hyper_posterior, opt_state), log_probs
 
     num_examples = data[0].shape[0]
+    if num_examples == 1:
+        return _update((hyper_posterior, opt_state), key)
     return jax.lax.scan(
         _update,
         (hyper_posterior, opt_state),
@@ -141,7 +146,7 @@ def mll(batch_x, batch_y, model, prior, prior_weight):
         distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(batch_y).mean()
     )
     log_prior = prior.log_prob(model)
-    return log_likelihood + log_prior * prior_weight
+    return log_likelihood.mean() + log_prior * prior_weight
 
 
 def infer_posterior(

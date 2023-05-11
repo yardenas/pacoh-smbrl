@@ -1,18 +1,23 @@
 # type: ignore
-import importlib
-
 import jax
 import numpy as np
 import pytest
 from hydra import compose, initialize
 
 from smbrl import acting, tasks
+from smbrl.agents.asmbrl import ASMBRL
+from smbrl.agents.fsmbrl import fSMBRL
+from smbrl.agents.smbrl import SMBRL
 from smbrl.trainer import Trainer
 from smbrl.trajectory import TrajectoryData
 from smbrl.utils import ensemble_predict, normalize
 
 
-@pytest.mark.parametrize("agent", ["asmbrl", "smbrl"], ids=["asmbrl", "smbrl"])
+@pytest.mark.parametrize(
+    "agent",
+    ["asmbrl", "smbrl", "fsmbrl"],
+    ids=["asmbrl", "smbrl", "fsmbrl"],
+)
 def test_training(agent):
     with initialize(version_base=None, config_path="../smbrl/configs"):
         cfg = compose(
@@ -43,7 +48,7 @@ def smbrl_predictions(agent, horizon):
     step = jax.vmap(jax.vmap(agent.model.step))
     sample = lambda obs, acs: agent.model.sample(
         horizon,
-        obs,
+        obs[0],
         jax.random.PRNGKey(0),
         acs,
     )
@@ -63,8 +68,45 @@ def asmbrl_predictions(agent, horizon):
     )
     vmaped_sample = jax.vmap(sample)
     partial_sample = lambda o, a: vmaped_sample(agent.model, o, a)
-    mean_sample = lambda o, a: jax.tree_map(lambda x: x.mean(1), partial_sample(o, a))
+    mean_sample = lambda o, a: jax.tree_map(
+        lambda x: x.mean(1), partial_sample(o[:, :, 0], a)
+    )
     return mean_step, mean_sample
+
+
+def fsmbrl_predicitions(agent, horizon):
+    ssm = agent.model.ssm
+
+    def unroll_step(o, a):
+        def f(carry, x):
+            prev_hidden = carry
+            observation, action = x
+            hidden, out = agent.model.step(observation, action, ssm, prev_hidden)
+            return hidden, out
+
+        init_hidden = agent.model.init_state
+        return jax.lax.scan(f, init_hidden, (o, a))
+
+    step = jax.vmap(jax.vmap(lambda o, a: unroll_step(o, a)[1]))
+
+    def sample(o, a):
+        context = a.shape[0] - horizon
+        hidden, out_context = unroll_step(o[:context], a[:context])
+        out = agent.model.sample(
+            horizon,
+            o[context],
+            jax.random.PRNGKey(0),
+            a[context:],
+            ssm,
+            hidden,
+        )
+        out = jax.tree_map(
+            lambda x, y: jax.numpy.concatenate([x, y], axis=0), out_context, out
+        )
+        return out
+
+    vmaped_sample = jax.vmap(jax.vmap(sample))
+    return step, vmaped_sample
 
 
 NUM_TASKS = 5
@@ -75,7 +117,9 @@ COMMON = [
     f"training.parallel_envs={NUM_TASKS}",
     "training.render_episodes=0",
     "training.scale_reward=0.1",
+    "training.time_limit=100",
     "agent.replay_buffer.num_shots=1",
+    "log_dir=/dev/null",
 ]
 
 SMBRL_CFG = COMMON.copy()
@@ -86,23 +130,23 @@ ASMBRL_CFG = [
     "agent.posterior.update_steps=100",
 ] + COMMON
 
+FSMBRL_CFG = [
+    "agent=fsmbrl",
+    "agent.update_steps=100",
+    "agent.model.n_layers=4",
+    "agent.model.hidden_size=128",
+    "agent.model.hippo_n=64",
+    "agent.replay_buffer.sequence_length=84",
+] + COMMON
 
-@pytest.mark.parametrize(
-    "agent, pred_fn_factory, overrides",
-    [
-        ("asmbrl", asmbrl_predictions, ASMBRL_CFG),
-        ("smbrl", smbrl_predictions, SMBRL_CFG),
-    ],
-    ids=["asmbrl", "smbrl"],
-)
-def test_model_learning(agent, pred_fn_factory, overrides):
+
+def collect_trajectories(cfg_overrides, agent_class):
+    cfg_overrides, agent_class
     with initialize(version_base=None, config_path="../smbrl/configs"):
-        cfg = compose(config_name="config", overrides=overrides)
+        cfg = compose(config_name="config", overrides=cfg_overrides)
     make_env, task_sampler = tasks.make(cfg)
     with Trainer(cfg, make_env, task_sampler) as trainer:
         assert trainer.agent is not None and trainer.env is not None
-        agent_module = importlib.import_module(f"smbrl.agents.{agent}")
-        agent_class = getattr(agent_module, agent.upper())
         rs = np.random.RandomState(0)
         agent_class.__call__ = lambda self, observation: np.tile(
             rs.uniform(-1.0, 1.0, trainer.env.action_space.shape),
@@ -127,14 +171,31 @@ def test_model_learning(agent, pred_fn_factory, overrides):
         trajectories.reward,
         trajectories.cost,
     )
-    trajectories = TrajectoryData(*map(lambda x: x[:, None, :35], trajectories))
-    context = 10
+    context = 35
+    sequence_length = 84
+    trajectories = TrajectoryData(
+        *map(lambda x: x[:, None, :sequence_length], trajectories)
+    )
+    return trajectories, context, sequence_length, agent
+
+
+@pytest.mark.parametrize(
+    "pred_fn_factory, overrides, agent_class",
+    [
+        (asmbrl_predictions, ASMBRL_CFG, ASMBRL),
+        (smbrl_predictions, SMBRL_CFG, SMBRL),
+        (fsmbrl_predicitions, FSMBRL_CFG, fSMBRL),
+    ],
+    ids=["asmbrl", "smbrl", "fsmbrl"],
+)
+def test_model_learning(pred_fn_factory, overrides, agent_class):
+    trajectories, context, sequence_length, agent = collect_trajectories(
+        overrides, agent_class
+    )
     horizon = trajectories.observation.shape[2] - context
     step, sample = pred_fn_factory(agent, horizon)
     onestep_predictions = step(trajectories.observation, trajectories.action)
-    multistep_predictions = sample(
-        trajectories.observation[:, :, context], trajectories.action[:, :, context:]
-    )
+    multistep_predictions = sample(trajectories.observation, trajectories.action)
     evaluate(onestep_predictions, multistep_predictions, trajectories, context)
     plot(trajectories.next_observation, multistep_predictions.next_state, context)
 
@@ -145,11 +206,9 @@ def evaluate(onestep_predictions, multistep_predictions, trajectories, context):
     onestep_obs_mse = l2(onestep_predictions.next_state, trajectories.next_observation)
     print(f"One step Reward MSE: {onestep_reward_mse}")
     print(f"One step Observation MSE: {onestep_obs_mse}")
-    multistep_reward_mse = l2(
-        multistep_predictions.reward, trajectories.reward[:, :, context:]
-    )
+    multistep_reward_mse = l2(multistep_predictions.reward, trajectories.reward)
     multistep_obs_mse = l2(
-        multistep_predictions.next_state, trajectories.next_observation[:, :, context:]
+        multistep_predictions.next_state, trajectories.next_observation
     )
     print(f"Multistep step Reward MSE: {multistep_reward_mse}")
     print(f"Multistep Observation MSE: {multistep_obs_mse}")
@@ -166,7 +225,7 @@ def plot(y, y_hat, context):
         plt.subplot(3, 4, i + 1)
         plt.plot(t, y[i, 0, :, 2], "b.", label="observed")
         plt.plot(
-            t[context:],
+            t,
             y_hat[i, 0, :, 2],
             "r",
             label="prediction",
@@ -181,5 +240,5 @@ def plot(y, y_hat, context):
         ax.axvline(context, color="k", linestyle="--", linewidth=1.0)
     plt.tight_layout()
     plt.show(block=False)
-    plt.pause(5)
+    plt.pause(100)
     plt.close()

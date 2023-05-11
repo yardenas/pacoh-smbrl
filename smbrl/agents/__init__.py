@@ -2,6 +2,7 @@ from gymnasium.spaces import Box
 from omegaconf import DictConfig
 
 from smbrl.agents.asmbrl import ASMBRL
+from smbrl.agents.fsmbrl import fSMBRL
 from smbrl.agents.smbrl import SMBRL
 from smbrl.logging import TrainingLogger
 from smbrl.types import Agent
@@ -28,6 +29,8 @@ def make(
                 config,
                 logger,
             )
+        case "fsmbrl":
+            return fSMBRL(observation_space, action_space, config, logger)
         case _:
             raise NotImplementedError
 

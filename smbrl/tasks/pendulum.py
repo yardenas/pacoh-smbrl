@@ -71,7 +71,8 @@ class GravityPendulum(Wrapper[Box, Box]):
             options["init_x"] = initial_angle
         else:
             options = {"init_x": initial_angle}
-        return self.env.reset(options=options)
+        outs = self.env.reset(seed=seed, options=options)
+        return outs
 
     @no_type_check
     def step(self, u):

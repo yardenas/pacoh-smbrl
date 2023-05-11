@@ -12,12 +12,14 @@ from smbrl import metrics as m
 from smbrl.agents import cem
 from smbrl.agents import pacoh_nn as pch
 from smbrl.agents.base import AgentBase
-from smbrl.agents.models import Model
+from smbrl.agents.models import FeedForwardModel
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import Data, FloatArray
 from smbrl.utils import Count, Learner, add_to_buffer, ensemble_predict, normalize
+
+pacoh_regression = eqx.filter_jit(ml.pacoh_regression)
 
 
 def buffer_factory(
@@ -48,7 +50,7 @@ def buffer_factory(
 
 @eqx.filter_jit
 def policy(
-    model: Model,
+    model: FeedForwardModel,
     observation: jax.Array,
     horizon: int,
     init_guess: jax.Array,
@@ -84,14 +86,14 @@ def policy(
 @eqx.filter_jit
 def infer_posterior_per_task(
     data: Data,
-    prior: Model,
-    posterior: Model,
+    prior: FeedForwardModel,
+    posterior: FeedForwardModel,
     update_steps: int,
     learning_rate: float,
     key: jax.random.KeyArray,
     prior_weight: float,
     bandwidth: float,
-) -> tuple[Model, jax.Array]:
+) -> tuple[FeedForwardModel, jax.Array]:
     def infer_posterior(data, posterior):
         posterior, logprobs = pch.infer_posterior(
             data,
@@ -140,7 +142,7 @@ class ASMBRL(AgentBase):
             config.training.adaptation_budget,
             config.agent.replay_buffer.batch_size,
         )
-        model_factory = lambda key: Model(
+        model_factory = lambda key: FeedForwardModel(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
             key=key,
@@ -195,7 +197,9 @@ class ASMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        data = ml.prepare_data(self.slow_buffer, self.config.agent.pacoh.num_examples)
+        data = ml.sample_and_prepare_data(
+            self.slow_buffer, self.config.agent.pacoh.num_examples
+        )
         pacoh_cfg = self.config.agent.pacoh
         logprobs = self.pacoh_learner.update_hyper_posterior(
             data,
@@ -215,7 +219,7 @@ class ASMBRL(AgentBase):
             self.config.training.scale_reward,
         )
         posterior_cfg = self.config.agent.posterior
-        data = ml.prepare_data(self.fast_buffer, posterior_cfg.num_examples)
+        data = ml.sample_and_prepare_data(self.fast_buffer, posterior_cfg.num_examples)
         self.model, logprobs = self.pacoh_learner.infer_posteriors(
             data,
             self.model,
@@ -243,7 +247,7 @@ class ASMBRL(AgentBase):
 class PACOHLearner:
     def __init__(
         self,
-        model_factory: Callable[[jax.random.KeyArray], Model],
+        model_factory: Callable[[jax.random.KeyArray], FeedForwardModel],
         key: jax.random.KeyArray,
         config: DictConfig,
     ):
@@ -268,7 +272,7 @@ class PACOHLearner:
         prior_weight: float,
         bandwidth: float,
     ) -> jax.Array:
-        (self.hyper_posterior, self.learner.state), logprobs = ml.pacoh_regression(
+        (self.hyper_posterior, self.learner.state), logprobs = pacoh_regression(
             data,
             self.hyper_prior,
             self.hyper_posterior,
@@ -285,13 +289,13 @@ class PACOHLearner:
     def infer_posteriors(
         self,
         data: Data,
-        posterior: Model,
+        posterior: FeedForwardModel,
         update_steps: int,
         learning_rate: float,
         key: jax.random.KeyArray,
         prior_weight: float,
         bandwidth: float,
-    ) -> Model:
+    ) -> FeedForwardModel:
         return infer_posterior_per_task(
             data,
             self.prior,
@@ -305,7 +309,7 @@ class PACOHLearner:
 
     def sample_prior(
         self, key: jax.random.KeyArray, n_prior_samples: int, task_batch_size: int
-    ) -> Model:
+    ) -> FeedForwardModel:
         model = jax.vmap(pch.sample_prior_models, (None, 0, None))(
             self.hyper_posterior,
             jax.random.split(key, task_batch_size),
