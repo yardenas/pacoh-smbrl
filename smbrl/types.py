@@ -70,6 +70,16 @@ class Agent(Protocol):
         ...
 
 
+class Actor(Protocol):
+    def act(
+        self,
+        state: FloatArray,
+        key: Optional[jax.random.KeyArray] = None,
+        deterministic: bool = False,
+    ) -> FloatArray:
+        ...
+
+
 class Prediction(NamedTuple):
     next_state: jax.Array
     reward: jax.Array
@@ -82,4 +92,8 @@ class Moments(NamedTuple):
     stddev: Optional[jax.Array] = None
 
 
-RolloutFn = Callable[[int, jax.Array, jax.random.KeyArray, jax.Array], Prediction]
+Policy = Callable[[jax.Array], jax.Array]
+
+RolloutFn = Callable[
+    [int, jax.Array, jax.random.KeyArray, jax.Array | Policy], Prediction
+]
