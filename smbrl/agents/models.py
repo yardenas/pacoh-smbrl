@@ -136,14 +136,14 @@ class S4Model(eqx.Module):
 
     def __init__(
         self,
-        state_dim,
-        action_dim,
-        n_layers,
-        hippo_n,
-        hidden_size,
-        sequence_length,
+        state_dim: int,
+        action_dim: int,
+        n_layers: int,
+        hippo_n: int,
+        hidden_size: int,
+        sequence_length: int,
         *,
-        key
+        key: jax.random.KeyArray
     ):
         keys = jax.random.split(key, n_layers + 2)
         self.layers = [
