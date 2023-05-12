@@ -147,6 +147,7 @@ class fSMBRL(AgentBase):
             self.config.training.scale_reward,
         )
         self.update_model()
+        self.s4_state = init_state(self.model, self.config.training.task_batch_size)
 
     def update_model(self):
         for batch in sample_data(self.replay_buffer, self.config.agent.update_steps):
@@ -160,7 +161,7 @@ class fSMBRL(AgentBase):
         self.ssm = self.model.ssm
 
     def reset(self):
-        self.s4_state = init_state(self.model, self.config.training.task_batch_size)
+        pass
 
 
 def bind_to_model(fn, **kwargs):
