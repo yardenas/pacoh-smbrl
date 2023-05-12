@@ -112,7 +112,7 @@ class ModelBasedActorCritic:
         self.actor = results.new_actor
         self.critic = results.new_critic
         self.actor_learner.state = results.new_actor_learning_state
-        self.critic_learner.state = results.new_actor_learning_state
+        self.critic_learner.state = results.new_critic_learning_state
         return results.actor_loss, results.critic_loss
 
 

@@ -1,6 +1,6 @@
 name: smbrl
 replay_buffer:
-  batch_size: 128
+  batch_size: 32
   sequence_length: 64
   num_shots: 4
   capacity: 1000
