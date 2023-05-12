@@ -47,7 +47,7 @@ class Model(Protocol):
         horizon: int,
         initial_state: jax.Array,
         key: jax.random.KeyArray,
-        action_sequence: jax.Array,
+        policy: "Policy",
     ) -> "Prediction":
         ...
 
@@ -92,8 +92,6 @@ class Moments(NamedTuple):
     stddev: Optional[jax.Array] = None
 
 
-Policy = Callable[[jax.Array], jax.Array]
+Policy = Union[Callable[[jax.Array], jax.Array], jax.Array]
 
-RolloutFn = Callable[
-    [int, jax.Array, jax.random.KeyArray, jax.Array | Policy], Prediction
-]
+RolloutFn = Callable[[int, jax.Array, jax.random.KeyArray, Policy], Prediction]

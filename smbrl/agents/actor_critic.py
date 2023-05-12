@@ -89,10 +89,10 @@ class ModelBasedActorCritic:
         self.discount = discount
         self.lambda_ = lambda_
 
-    def update_actor_critic(
+    def update(
         self,
         rollout_fn: types.RolloutFn,
-        initial_states: jax.Array,
+        initial_states: types.FloatArray,
         key: jax.random.KeyArray,
     ):
         results = update_actor_critic(

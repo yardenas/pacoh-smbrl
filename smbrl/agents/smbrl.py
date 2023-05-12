@@ -1,37 +1,17 @@
-import equinox as eqx
-import jax
-import jax.numpy as jnp
 import numpy as np
 from gymnasium import spaces
 from omegaconf import DictConfig
 
 from smbrl import metrics as m
-from smbrl.agents import cem
 from smbrl.agents import model_learning as ml
+from smbrl.agents.actor_critic import ModelBasedActorCritic
 from smbrl.agents.base import AgentBase
 from smbrl.agents.models import FeedForwardModel
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
-from smbrl.types import FloatArray, RolloutFn
-from smbrl.utils import Count, Learner, add_to_buffer, normalize
-
-
-@eqx.filter_jit
-def policy(
-    observation: jax.Array,
-    sample: RolloutFn,
-    horizon: int,
-    init_guess: jax.Array,
-    key: jax.random.KeyArray,
-    cem_config: cem.CEMConfig,
-):
-    # vmap over batches of observations (e.g., solve cem separately for
-    # each individual environment)
-    cem_per_env = jax.vmap(
-        lambda o: cem.policy(o, sample, horizon, init_guess, key, cem_config)
-    )
-    return cem_per_env(observation)
+from smbrl.types import FloatArray
+from smbrl.utils import Learner, add_to_buffer, normalize
 
 
 class SMBRL(AgentBase):
@@ -64,34 +44,30 @@ class SMBRL(AgentBase):
             **config.agent.model,
         )
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
-        self.replan = Count(config.agent.replan_every)
-        self.plan = np.zeros(
-            (config.training.parallel_envs, config.agent.plan_horizon)
-            + action_space.shape
+        self.actor_critic = ModelBasedActorCritic(
+            np.prod(observation_space.shape),
+            np.prod(action_space.shape),
+            config.actor.agent.actor,
+            config.agent.critic,
+            config.agent.actor_optimizer,
+            config.agent.critic_optimizer,
+            config.agent.plan_horizon,
+            config.agent.discount,
+            config.agent.lambda_,
+            next(self.prng),
         )
 
     def __call__(
         self,
         observation: FloatArray,
     ) -> FloatArray:
-        if self.replan():
-            normalized_obs = normalize(
-                observation,
-                self.obs_normalizer.result.mean,
-                self.obs_normalizer.result.std,
-            )
-            horizon = self.config.agent.plan_horizon
-            init_guess = jnp.zeros((horizon, self.replay_buffer.action.shape[-1]))
-            action = policy(
-                normalized_obs,
-                self.model.sample,
-                horizon,
-                init_guess,
-                next(self.prng),
-                self.config.agent.cem,
-            )
-            self.plan = np.asarray(action)
-        return self.plan[:, self.replan.count]
+        normalized_obs = normalize(
+            observation,
+            self.obs_normalizer.result.mean,
+            self.obs_normalizer.result.std,
+        )
+        action = self.actor_critic.actor.act(normalized_obs, next(self.prng))
+        return np.asarray(action)
 
     def observe(self, trajectory: TrajectoryData) -> None:
         self.obs_normalizer.update_state(
@@ -107,14 +83,19 @@ class SMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        self.update_model()
+        self.update()
 
-    def update_model(self):
-        x, y = ml.sample_and_prepare_data(
-            self.replay_buffer, self.config.agent.update_steps
-        )
-        (self.model, self.model_learner.state), loss = ml.simple_regression(
-            (x, y),
+    def update(self) -> None:
+        for batch in self.replay_buffer.sample(self.config.agent.update_steps):
+            self.update_model(batch)
+            self.actor_critic.update(
+                self.model.sample, batch.observation, next(self.prng)
+            )
+
+    def update_model(self, batch: TrajectoryData) -> None:
+        regression_batch = ml.prepare_data(batch)
+        (self.model, self.model_learner.state), loss = ml.regression_step(
+            regression_batch,
             self.model,
             self.model_learner,
             self.model_learner.state,

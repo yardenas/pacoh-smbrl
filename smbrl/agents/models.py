@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jaxtyping import PyTree
 
 from smbrl.agents.s4 import SequenceBlock
-from smbrl.types import Moments, Prediction
+from smbrl.types import Moments, Policy, Prediction
 
 
 class FeedForwardModel(eqx.Module):
@@ -72,11 +72,15 @@ class FeedForwardModel(eqx.Module):
         horizon: int,
         initial_state: jax.Array,
         key: jax.random.KeyArray,
-        action_sequence: jax.Array,
+        policy: Policy,
     ) -> Prediction:
         def f(carry, x):
             prev_state = carry
-            action, key = x
+            if callable_policy:
+                key = x
+                action = policy(prev_state)
+            else:
+                action, key = x
             out = self.step(
                 prev_state,
                 action,
@@ -84,7 +88,15 @@ class FeedForwardModel(eqx.Module):
             return out.next_state, out
 
         init = initial_state
-        inputs = (action_sequence, jax.random.split(key, action_sequence.shape[0]))
+        callable_policy = False
+        if isinstance(policy, jax.Array):
+            inputs: tuple[jax.Array, jax.random.KeyArray] | jax.random.KeyArray = (
+                policy,
+                jax.random.split(key, policy.shape[0]),
+            )
+        else:
+            callable_policy = True
+            inputs = jax.random.split(key, horizon)
         _, out = jax.lax.scan(
             f,
             init,
@@ -188,7 +200,7 @@ class S4Model(eqx.Module):
         horizon: int,
         initial_state: jax.Array,
         key: jax.random.KeyArray,
-        action_sequence: jax.Array,
+        policy: Policy,
         layers_ssm: list[SSM],
         layers_hidden: list[jax.Array],
     ) -> Prediction:
@@ -203,10 +215,9 @@ class S4Model(eqx.Module):
             )
             return (out_hidden, out.next_state), out
 
-        assert horizon == action_sequence.shape[0]
         assert all(x.ndim == 2 for x in layers_hidden)
         init = (layers_hidden, initial_state)
-        inputs = (action_sequence, jax.random.split(key, horizon))
+        inputs = (policy, jax.random.split(key, horizon))
         _, out = jax.lax.scan(
             f,
             init,

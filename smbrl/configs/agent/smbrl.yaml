@@ -7,15 +7,26 @@ replay_buffer:
 model:
   n_layers: 2
   hidden_size: 128
-replan_every: 1
+actor:
+  n_layers: 2
+  hidden_size: 128
+critic:
+  n_layers: 2
+  hidden_size: 128
+actor_optimizer:
+  lr: 3e-4
+  eps: 1e-5
+  clip: 0.5
+actor_optimizer:
+  lr: 3e-4
+  eps: 1e-5
+  clip: 0.5
 model_optimizer:
   lr: 3e-4
   eps: 1e-5
   clip: 0.5
-cem:
-  num_particles: 100
-  num_iters: 10
-  num_elite: 10
-  stop_cond: 0.1
+discount: 0.99
+lambda_: 0.97
+replan_every: 1
 plan_horizon: 15
 update_steps: 100
