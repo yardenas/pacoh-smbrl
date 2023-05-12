@@ -161,8 +161,11 @@ def update_actor_critic(
     ) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
         traj_key, policy_key = jax.random.split(key, 2)
         policy = lambda state: actor.act(state, key=policy_key)
-        trajectories = rollout_fn(horizon, initial_states, traj_key, policy)
-        bootstrap_values = jax.vmap(critic)(trajectories.next_state)
+        trajectories = jax.vmap(rollout_fn, (None, 0, None, None))(
+            horizon, initial_states, traj_key, policy
+        )
+        # vmap over batch and time axes.
+        bootstrap_values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
         lambda_values = eqx.filter_vmap(compute_lambda_values)(
             bootstrap_values, trajectories.reward, discount, lambda_
         )
@@ -175,8 +178,8 @@ def update_actor_critic(
     )
 
     def critic_loss_fn(critic: Critic) -> jax.Array:
-        targets = jax.vmap(critic)(trajectories.next_state)
-        return l2_loss(lambda_values, targets).mean()
+        values = jax.vmap(jax.vmap(critic))(trajectories.next_state[:, :-1])
+        return l2_loss(values, lambda_values[:, 1:]).mean()
 
     critic_loss, grads = eqx.filter_value_and_grad(critic_loss_fn)(critic)
     new_critic, new_critic_state = critic_learner.grad_step(

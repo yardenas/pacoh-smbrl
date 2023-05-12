@@ -1,3 +1,5 @@
+import equinox as eqx
+import jax
 import numpy as np
 from gymnasium import spaces
 from omegaconf import DictConfig
@@ -12,6 +14,11 @@ from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import FloatArray
 from smbrl.utils import Learner, add_to_buffer, normalize
+
+
+@eqx.filter_jit
+def policy(actor, observation, key):
+    return jax.vmap(lambda o: actor.act(o, key))(observation)
 
 
 class SMBRL(AgentBase):
@@ -47,7 +54,7 @@ class SMBRL(AgentBase):
         self.actor_critic = ModelBasedActorCritic(
             np.prod(observation_space.shape),
             np.prod(action_space.shape),
-            config.actor.agent.actor,
+            config.agent.actor,
             config.agent.critic,
             config.agent.actor_optimizer,
             config.agent.critic_optimizer,
@@ -66,7 +73,7 @@ class SMBRL(AgentBase):
             self.obs_normalizer.result.mean,
             self.obs_normalizer.result.std,
         )
-        action = self.actor_critic.actor.act(normalized_obs, next(self.prng))
+        action = policy(self.actor_critic.actor, normalized_obs, next(self.prng))
         return np.asarray(action)
 
     def observe(self, trajectory: TrajectoryData) -> None:
@@ -88,9 +95,12 @@ class SMBRL(AgentBase):
     def update(self) -> None:
         for batch in self.replay_buffer.sample(self.config.agent.update_steps):
             self.update_model(batch)
-            self.actor_critic.update(
-                self.model.sample, batch.observation, next(self.prng)
+            initial_states = batch.observation.reshape(-1, batch.observation.shape[-1])
+            actor_loss, critic_loss = self.actor_critic.update(
+                self.model.sample, initial_states, next(self.prng)
             )
+            self.logger["agent/actor/loss"] = float(actor_loss.mean())
+            self.logger["agent/critic/loss"] = float(critic_loss.mean())
 
     def update_model(self, batch: TrajectoryData) -> None:
         regression_batch = ml.prepare_data(batch)
