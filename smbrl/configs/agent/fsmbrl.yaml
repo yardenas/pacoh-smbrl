@@ -1,11 +1,11 @@
 name: fsmbrl
 replay_buffer:
   batch_size: 32
-  sequence_length: 32
+  sequence_length: 84
   num_shots: 4
   capacity: 1000
 model:
-  n_layers: 3
+  n_layers: 1
   hidden_size: 64
   hippo_n: 16
 update_steps: 100
