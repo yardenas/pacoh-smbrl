@@ -31,6 +31,17 @@ def prepare_data(data):
     return x, y
 
 
+def variational_step(
+    batch: types.Data,
+    model: types.Model,
+    learner: Learner,
+    opt_state: OptState,
+    key: jax.random.KeyArray,
+    beta: float = 1.0,
+):
+    
+
+
 def regression_step(
     batch: types.Data, model: types.Model, learner: Learner, opt_state: OptState
 ) -> types.ModelUpdate:

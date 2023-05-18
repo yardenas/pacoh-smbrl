@@ -1,23 +1,33 @@
 from typing import NamedTuple
 
-import jax
-import jax.numpy as jnp
-import jax.nn as jnn
-import equinox as eqx
 import distrax as dtx
+import equinox as eqx
+import jax
+import jax.nn as jnn
+import jax.numpy as jnp
 
-from smbrl.types import Moments, Prediction
+from smbrl.types import Prediction
 
 
 class State(NamedTuple):
     stochastic: jax.Array
     deterministic: jax.Array
 
+    def flatten(self):
+        return jnp.concatenate([self.stochastic, self.deterministic], axis=-1)
+
 
 class Features(NamedTuple):
-    action: jax.Array
+    observation: jax.Array
     reward: jax.Array
     cost: jax.Array
+
+    def flatten(self):
+        return jnp.concatenate([self.observation, self.reward, self.cost], axis=-1)
+
+    @classmethod
+    def from_flat(cls, flat):
+        return cls(*jnp.split(flat, [-1, 1, 1], axis=-1))
 
 
 class ShiftScale(NamedTuple):
@@ -54,9 +64,9 @@ class Prior(eqx.Module):
         )
 
     def __call__(
-        self, prev_state: State, features: Features
+        self, prev_state: State, action: jax.Array
     ) -> tuple[dtx.Normal, jax.Array]:
-        x = to_ins(prev_state.stochastic, features)
+        x = to_ins(prev_state.stochastic, action)
         x = jnn.elu(self.encoder(x))
         hidden = self.cell(x, prev_state.deterministic)
         x = jnn.elu(self.decoder1(hidden))
@@ -84,8 +94,8 @@ class Posterior(eqx.Module):
         )
         self.decoder = eqx.nn.Linear(hidden_size, stochastic_size * 2, key=decoder_key)
 
-    def __call__(self, prev_state: State, observation: jax.Array):
-        x = jnp.concatenate([prev_state.deterministic, observation], -1)
+    def __call__(self, prev_state: State, embedding: jax.Array):
+        x = jnp.concatenate([prev_state.deterministic, embedding], -1)
         x = jnn.elu(self.encoder(x))
         x = self.decoder(x)
         mu, stddev = jnp.split(x, 2, -1)
@@ -93,7 +103,7 @@ class Posterior(eqx.Module):
         return ShiftScale(mu, stddev)
 
 
-class AdaM(eqx.Module):
+class RSSM(eqx.Module):
     prior: Prior
     posterior: Posterior
 
@@ -121,22 +131,22 @@ class AdaM(eqx.Module):
         self.stochastic_size = stochastic_size
 
     def predict(
-        self, prev_state: State, features: Features, key: jax.random.KeyArray
+        self, prev_state: State, action: jax.Array, key: jax.random.KeyArray
     ) -> State:
-        prior, deterministic = self.prior(prev_state, features)
+        prior, deterministic = self.prior(prev_state, action)
         stochastic = dtx.Normal(*prior).sample(seed=key)
         return State(stochastic, deterministic)
 
     def filter(
         self,
         prev_state: State,
-        features: Features,
-        observation: jax.Array,
+        embeddings: jax.Array,
+        action: jax.Array,
         key: jax.random.KeyArray,
     ) -> tuple[State, ShiftScale, ShiftScale]:
-        prior, deterministic = self.prior(prev_state, features)
+        prior, deterministic = self.prior(prev_state, action)
         state = State(prev_state.stochastic, deterministic)
-        posterior = self.posterior(state, observation)
+        posterior = self.posterior(state, embeddings)
         stochastic = dtx.Normal(*posterior).sample(seed=key)
         return State(stochastic, deterministic), prior, posterior
 
@@ -146,7 +156,7 @@ class AdaM(eqx.Module):
 
 
 class WorldModel(eqx.Module):
-    cell: AdaM
+    cell: RSSM
     encoder: eqx.nn.Linear
     decoder: eqx.nn.Linear
 
@@ -162,7 +172,7 @@ class WorldModel(eqx.Module):
         key
     ):
         cell_key, encoder_key, decoder_key = jax.random.split(key, 3)
-        self.cell = AdaM(
+        self.cell = RSSM(
             deterministic_size,
             stochastic_size,
             hidden_size,
@@ -176,58 +186,54 @@ class WorldModel(eqx.Module):
         self.decoder = eqx.nn.Linear(hidden_size, state_dim + 1, key=decoder_key)
 
     def __call__(
-        self,
-        x: jax.Array,
-    ) -> Moments:
-        x = jax.vmap(self.encoder)(x)
-        self.cell()
-        outs = jax.vmap(self.decoder)(x)
-        return Moments(outs)
+        self, features: Features, actions: jax.Array, key: jax.random.KeyArray
+    ) -> tuple[State, jax.Array, ShiftScale, ShiftScale]:
+        obs_embeddings = jax.vmap(self.encoder)(features.flatten())
+
+        def fn(carry, inputs):
+            prev_state = carry
+            embedding, prev_action, key = inputs
+            state, prior, posterior = self.cell.filter(
+                prev_state, embedding, prev_action, key
+            )
+            return state, (state, prior, posterior)
+
+        keys = jax.random.split(key, obs_embeddings.shape[0])
+        last_state, (states, priors, posteriors) = jax.lax.scan(
+            fn,
+            self.cell.init,
+            (obs_embeddings, actions, keys),
+        )
+        outs = jax.vmap(self.decoder)(states.flatten())
+        return last_state, outs, priors, posteriors
 
     def step(
         self,
-        state: jax.Array,
+        state: State,
+        features: Features,
         action: jax.Array,
-        hidden_state: State,
-    ) -> tuple[list[jax.Array], Prediction]:
-        x = to_ins(state, action)
-        x = self.encoder(x)
-        x = x[None]
-        out_hiddens = []
-        for layer, ssm, hidden in zip(self.layers, layers_ssm, layers_hidden):
-            hidden, x = layer(x, ssm=ssm, hidden=hidden)
-            out_hiddens.append(hidden)
-        outs = self.decoder(x[0])
-        state, reward = jnp.split(
-            outs, [self.decoder.out_features - 1], -1  # type: ignore
-        )
-        return out_hiddens, Prediction(state, reward.squeeze(-1))
+        key: jax.random.KeyArray,
+    ) -> State:
+        obs_embeddings = self.encoder(features.flatten())
+        state, *_ = self.cell.filter(state, obs_embeddings, action, key)
+        return state
 
     def sample(
         self,
         horizon: int,
-        initial_state: jax.Array,
-        key: jax.random.KeyArray,
+        state: State,
         action_sequence: jax.Array,
-        hidden_state: State,
+        key: jax.random.KeyArray,
     ) -> Prediction:
-        def f(carry, x):
-            prev_hidden, prev_state = carry
-            action, key = x
-            out_hidden, out = self.step(
-                prev_state,
-                action,
-                prev_hidden,
-            )
-            return (out_hidden, out.next_state), out
+        def f(carry, inputs):
+            prev_state = carry
+            prev_action, key = inputs
+            state = self.cell.predict(prev_state, prev_action, key)
+            out = self.decoder(state.flatten())
+            out = Prediction(out[:-1], out[-1])
+            return state, out
 
         assert horizon == action_sequence.shape[0]
-        assert all(x.ndim == 2 for x in layers_hidden)
-        init = (layers_hidden, initial_state)
-        inputs = (action_sequence, jax.random.split(key, horizon))
-        _, out = jax.lax.scan(
-            f,
-            init,
-            inputs,
-        )
+        keys = jax.random.split(key, horizon)
+        _, out = jax.lax.scan(f, state, (action_sequence, keys))
         return out
