@@ -2,22 +2,21 @@ from typing import Callable
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 import numpy as np
 from gymnasium import spaces
 from omegaconf import DictConfig
 
 import smbrl.agents.model_learning as ml
 from smbrl import metrics as m
-from smbrl.agents import cem
 from smbrl.agents import pacoh_nn as pch
+from smbrl.agents.actor_critic import ModelBasedActorCritic
 from smbrl.agents.base import AgentBase
 from smbrl.agents.models import FeedForwardModel
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import Data, FloatArray
-from smbrl.utils import Count, Learner, add_to_buffer, ensemble_predict, normalize
+from smbrl.utils import Learner, add_to_buffer, normalize
 
 pacoh_regression = eqx.filter_jit(ml.pacoh_regression)
 
@@ -48,39 +47,8 @@ def buffer_factory(
     return make
 
 
-@eqx.filter_jit
-def policy(
-    model: FeedForwardModel,
-    observation: jax.Array,
-    horizon: int,
-    init_guess: jax.Array,
-    key: jax.random.KeyArray,
-    cem_config: cem.CEMConfig,
-):
-    def sample_per_task(model):
-        # We get an ensemble of models which are specialized for a specific task.
-        # 1. Use each member of the ensemble to make predictions.
-        # 2. Average over these predictions to (approximately) marginalize
-        #    over posterior parameters.
-        ensemble_sample = lambda m, h, o, k, a: ensemble_predict(
-            m.sample, (None, 0, None, 0)
-        )(
-            h,
-            o[None],
-            k,
-            a[None],
-        )
-        return lambda h, o, k, a: jax.tree_map(
-            lambda x: x.squeeze(1).mean(0), ensemble_sample(model, h, o, k, a)
-        )
-
-    cem_per_env = jax.vmap(
-        lambda m, o: cem.policy(
-            o, sample_per_task(m), horizon, init_guess, key, cem_config
-        ),
-    )
-    action = cem_per_env(model, observation)
-    return action
+def policy(actor, observation, key):
+    return eqx.filter_vmap(lambda actor, o: actor.act(o, key))(actor, observation)
 
 
 @eqx.filter_jit
@@ -154,34 +122,32 @@ class ASMBRL(AgentBase):
             config.agent.posterior.n_prior_samples,
             config.training.task_batch_size,
         )
-        self.replan = Count(config.agent.replan_every)
-        self.plan = np.zeros(
-            (config.training.parallel_envs, config.agent.plan_horizon)
-            + action_space.shape
+        self.actor_critic_factory = lambda key: ModelBasedActorCritic(
+            np.prod(observation_space.shape),
+            np.prod(action_space.shape),
+            config.agent.actor,
+            config.agent.critic,
+            config.agent.actor_optimizer,
+            config.agent.critic_optimizer,
+            config.agent.plan_horizon,
+            config.agent.discount,
+            config.agent.lambda_,
+            key,
+            config.training.task_batch_size,
         )
+        self.actor_critic = self.actor_critic_factory(next(self.prng))
 
     def __call__(
         self,
         observation: FloatArray,
     ) -> FloatArray:
-        if self.replan():
-            normalized_obs = normalize(
-                observation,
-                self.obs_normalizer.result.mean,
-                self.obs_normalizer.result.std,
-            )
-            horizon = self.config.agent.plan_horizon
-            init_guess = jnp.zeros((horizon, self.fast_buffer.action.shape[-1]))
-            action = policy(
-                self.model,
-                normalized_obs,
-                horizon,
-                init_guess,
-                next(self.prng),
-                self.config.agent.cem,
-            )
-            self.plan = np.asarray(action)
-        return self.plan[:, self.replan.count]
+        normalized_obs = normalize(
+            observation,
+            self.obs_normalizer.result.mean,
+            self.obs_normalizer.result.std,
+        )
+        action = policy(self.actor_critic.actor, normalized_obs, next(self.prng))
+        return np.asarray(action)
 
     def observe(self, trajectory: TrajectoryData) -> None:
         self.obs_normalizer.update_state(
@@ -230,6 +196,21 @@ class ASMBRL(AgentBase):
             posterior_cfg.bandwidth,
         )
         self.logger["agent/model/posterior_logprobs"] = float(logprobs)
+        self.update_actor_critic()
+
+    def update_actor_critic(self):
+        for batch in self.fast_buffer.sample(
+            self.config.agent.actor_critic_update_steps
+        ):
+            tasks, *_, dim = batch.observation.shape
+            initial_states = batch.observation.reshape(tasks, -1, dim)
+            actor_loss, critic_loss = self.actor_critic.update(
+                self.model,
+                initial_states,
+                next(self.prng),
+            )
+            self.logger["agent/actor/loss"] = float(actor_loss.mean())
+            self.logger["agent/critic/loss"] = float(critic_loss.mean())
 
     def reset(self):
         self.model = self.pacoh_learner.sample_prior(
@@ -242,6 +223,7 @@ class ASMBRL(AgentBase):
             self.config.training.adaptation_budget,
             self.config.agent.replay_buffer.batch_size,
         )
+        self.actor_critic = self.actor_critic_factory(next(self.prng))
 
 
 class PACOHLearner:

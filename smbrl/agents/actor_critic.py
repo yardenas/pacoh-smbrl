@@ -1,3 +1,4 @@
+from functools import partial
 from typing import NamedTuple, Optional
 
 import distrax as trx
@@ -5,10 +6,12 @@ import equinox as eqx
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
+from jaxtyping import PyTree
 from optax import OptState, l2_loss
+from pyparsing import Any
 
 from smbrl import types
-from smbrl.utils import Learner, inv_softplus
+from smbrl.utils import Learner, ensemble_predict, inv_softplus
 
 
 class ContinuousActor(eqx.Module):
@@ -69,34 +72,52 @@ class ModelBasedActorCritic:
         self,
         state_dim: int,
         action_dim: int,
-        actor_config: dict,
-        critic_config: dict,
-        actor_optimizer_config: dict,
-        critic_optimizer_config: dict,
+        actor_config: dict[str, Any],
+        critic_config: dict[str, Any],
+        actor_optimizer_config: dict[str, Any],
+        critic_optimizer_config: dict[str, Any],
         horizon: int,
         discount: float,
         lambda_: float,
         key: jax.random.KeyArray,
+        task_batch_size: int = 1,
     ) -> None:
         actor_key, critic_key = jax.random.split(key, 2)
-        self.actor = ContinuousActor(
-            state_dim=state_dim, action_dim=action_dim, **actor_config, key=actor_key
-        )
+        if task_batch_size > 1:
+            actor_factory = eqx.filter_vmap(
+                lambda key: ContinuousActor(
+                    state_dim=state_dim, action_dim=action_dim, **actor_config, key=key
+                )
+            )
+            self.actor = actor_factory(jax.random.split(actor_key, task_batch_size))
+            critic_factory = eqx.filter_vmap(
+                lambda key: Critic(state_dim=state_dim, **critic_config, key=key)
+            )
+            self.critic = critic_factory(jax.random.split(critic_key, task_batch_size))
+        else:
+            self.actor = ContinuousActor(
+                state_dim=state_dim, action_dim=action_dim, **actor_config
+            )
+            self.critic = Critic(state_dim=state_dim, **critic_config)
         self.actor_learner = Learner(self.actor, actor_optimizer_config)
-        self.critic = Critic(state_dim=state_dim, **critic_config, key=critic_key)
         self.critic_learner = Learner(self.critic, critic_optimizer_config)
         self.horizon = horizon
         self.discount = discount
         self.lambda_ = lambda_
+        self.task_batch_size = task_batch_size
 
     def update(
         self,
-        rollout_fn: types.RolloutFn,
+        model: types.Model,
         initial_states: types.FloatArray,
         key: jax.random.KeyArray,
     ):
-        results = update_actor_critic(
-            rollout_fn,
+        if self.task_batch_size > 1:
+            actor_critic_fn = taskwise_update_actor_critic
+        else:
+            actor_critic_fn = update_actor_critic
+        actor_critic_fn = partial(actor_critic_fn, model.sample)
+        results = actor_critic_fn(
             self.horizon,
             initial_states,
             self.actor,
@@ -141,21 +162,16 @@ class ActorCriticStepResults(NamedTuple):
     critic_loss: jax.Array
 
 
-@eqx.filter_jit
-def update_actor_critic(
+def actor_critic_grads(
     rollout_fn: types.RolloutFn,
     horizon: int,
     initial_states: jax.Array,
     actor: ContinuousActor,
     critic: Critic,
-    actor_learning_state: OptState,
-    critic_learning_state: OptState,
-    actor_learner: Learner,
-    critic_learner: Learner,
     key: jax.random.KeyArray,
     discount: float,
     lambda_: float,
-) -> ActorCriticStepResults:
+) -> tuple[PyTree, PyTree, jax.Array, jax.Array]:
     def actor_loss_fn(
         actor: ContinuousActor,
     ) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
@@ -171,19 +187,107 @@ def update_actor_critic(
         )
         return -lambda_values.mean(), (trajectories, lambda_values)
 
-    rest, grads = eqx.filter_value_and_grad(actor_loss_fn, has_aux=True)(actor)
+    rest, actor_grads = eqx.filter_value_and_grad(actor_loss_fn, has_aux=True)(actor)
     actor_loss, (trajectories, lambda_values) = rest
-    new_actor, new_actor_state = actor_learner.grad_step(
-        actor, grads, actor_learning_state
-    )
 
     def critic_loss_fn(critic: Critic) -> jax.Array:
         values = jax.vmap(jax.vmap(critic))(trajectories.next_state[:, :-1])
         return l2_loss(values, lambda_values[:, 1:]).mean()
 
-    critic_loss, grads = eqx.filter_value_and_grad(critic_loss_fn)(critic)
+    critic_loss, critic_grads = eqx.filter_value_and_grad(critic_loss_fn)(critic)
+    return actor_grads, critic_grads, actor_loss, critic_loss
+
+
+@eqx.filter_jit
+def update_actor_critic(
+    rollout_fn: types.RolloutFn,
+    horizon: int,
+    initial_states: jax.Array,
+    actor: ContinuousActor,
+    critic: Critic,
+    actor_learning_state: OptState,
+    critic_learning_state: OptState,
+    actor_learner: Learner,
+    critic_learner: Learner,
+    key: jax.random.KeyArray,
+    discount: float,
+    lambda_: float,
+) -> ActorCriticStepResults:
+    actor_grads, critic_grads, actor_loss, critic_loss = actor_critic_grads(
+        rollout_fn, horizon, initial_states, actor, critic, key, discount, lambda_
+    )
+    new_actor, new_actor_state = actor_learner.grad_step(
+        actor, actor_grads, actor_learning_state
+    )
     new_critic, new_critic_state = critic_learner.grad_step(
-        critic, grads, critic_learning_state
+        critic, critic_grads, critic_learning_state
+    )
+    return ActorCriticStepResults(
+        new_actor,
+        new_critic,
+        new_actor_state,
+        new_critic_state,
+        actor_loss,
+        critic_loss,
+    )
+
+
+def sample_per_task(sample_fn):
+    # We get an ensemble of models which are specialized for a specific task.
+    # 1. Use each member of the ensemble to make predictions.
+    # 2. Average over these predictions to (approximately) marginalize
+    #    over posterior parameters.
+    ensemble_sample = lambda sample_fn, h, o, k, pi: ensemble_predict(
+        sample_fn, (None, 0, None, None)
+    )(
+        h,
+        o[None],
+        k,
+        pi,
+    )
+    return lambda h, o, k, pi: jax.tree_map(
+        lambda x: x.squeeze(1).mean(0), ensemble_sample(sample_fn, h, o, k, pi)
+    )
+
+
+@eqx.filter_jit
+def taskwise_update_actor_critic(
+    rollout_fn: types.RolloutFn,
+    horizon: int,
+    initial_states: jax.Array,
+    actor: ContinuousActor,
+    critic: Critic,
+    actor_learning_state: OptState,
+    critic_learning_state: OptState,
+    actor_learner: Learner,
+    critic_learner: Learner,
+    key: jax.random.KeyArray,
+    discount: float,
+    lambda_: float,
+):
+    actor_critic_grads_fn = eqx.filter_vmap(
+        lambda i, a, c, m: actor_critic_grads(
+            sample_per_task(m),
+            horizon,
+            i,
+            a,
+            c,
+            key,
+            discount,
+            lambda_,
+        )
+    )
+    actor_grads, critic_grads, actor_loss, critic_loss = actor_critic_grads_fn(
+        initial_states,
+        actor,
+        critic,
+        rollout_fn,
+    )
+    new_actor, new_actor_state = actor_learner.grad_step(
+        actor, actor_grads, actor_learning_state
+    )
+    new_critic, new_critic_state = critic_learner.grad_step(
+        critic, critic_grads, critic_learning_state
     )
     return ActorCriticStepResults(
         new_actor,

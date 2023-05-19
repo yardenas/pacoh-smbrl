@@ -97,7 +97,7 @@ class SMBRL(AgentBase):
             self.update_model(batch)
             initial_states = batch.observation.reshape(-1, batch.observation.shape[-1])
             actor_loss, critic_loss = self.actor_critic.update(
-                self.model.sample, initial_states, next(self.prng)
+                self.model, initial_states, next(self.prng)
             )
             self.logger["agent/actor/loss"] = float(actor_loss.mean())
             self.logger["agent/critic/loss"] = float(critic_loss.mean())
