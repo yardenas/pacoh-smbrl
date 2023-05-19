@@ -33,6 +33,7 @@ class ContinuousActor(eqx.Module):
         init_std = inv_softplus(5.0)
         stddev = jnn.softplus(stddev + init_std) + 0.1
         dist = trx.Normal(mu, stddev)
+        dist = trx.Transformed(dist, trx.Tanh())
         return dist
 
     def act(
