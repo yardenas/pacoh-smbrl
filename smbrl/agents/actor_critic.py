@@ -6,7 +6,6 @@ import equinox as eqx
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
-from jaxtyping import PyTree
 from optax import OptState, l2_loss
 from pyparsing import Any
 
@@ -84,6 +83,7 @@ class ModelBasedActorCritic:
     ) -> None:
         actor_key, critic_key = jax.random.split(key, 2)
         if task_batch_size > 1:
+            batched = True
             actor_factory = eqx.filter_vmap(
                 lambda key: ContinuousActor(
                     state_dim=state_dim, action_dim=action_dim, **actor_config, key=key
@@ -95,12 +95,13 @@ class ModelBasedActorCritic:
             )
             self.critic = critic_factory(jax.random.split(critic_key, task_batch_size))
         else:
+            batched = False
             self.actor = ContinuousActor(
                 state_dim=state_dim, action_dim=action_dim, **actor_config
             )
             self.critic = Critic(state_dim=state_dim, **critic_config)
-        self.actor_learner = Learner(self.actor, actor_optimizer_config)
-        self.critic_learner = Learner(self.critic, critic_optimizer_config)
+        self.actor_learner = Learner(self.actor, actor_optimizer_config, batched)
+        self.critic_learner = Learner(self.critic, critic_optimizer_config, batched)
         self.horizon = horizon
         self.discount = discount
         self.lambda_ = lambda_
@@ -162,42 +163,6 @@ class ActorCriticStepResults(NamedTuple):
     critic_loss: jax.Array
 
 
-def actor_critic_grads(
-    rollout_fn: types.RolloutFn,
-    horizon: int,
-    initial_states: jax.Array,
-    actor: ContinuousActor,
-    critic: Critic,
-    key: jax.random.KeyArray,
-    discount: float,
-    lambda_: float,
-) -> tuple[PyTree, PyTree, jax.Array, jax.Array]:
-    def actor_loss_fn(
-        actor: ContinuousActor,
-    ) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
-        traj_key, policy_key = jax.random.split(key, 2)
-        policy = lambda state: actor.act(state, key=policy_key)
-        trajectories = jax.vmap(rollout_fn, (None, 0, None, None))(
-            horizon, initial_states, traj_key, policy
-        )
-        # vmap over batch and time axes.
-        bootstrap_values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
-        lambda_values = eqx.filter_vmap(compute_lambda_values)(
-            bootstrap_values, trajectories.reward, discount, lambda_
-        )
-        return -lambda_values.mean(), (trajectories, lambda_values)
-
-    rest, actor_grads = eqx.filter_value_and_grad(actor_loss_fn, has_aux=True)(actor)
-    actor_loss, (trajectories, lambda_values) = rest
-
-    def critic_loss_fn(critic: Critic) -> jax.Array:
-        values = jax.vmap(jax.vmap(critic))(trajectories.next_state[:, :-1])
-        return l2_loss(values, lambda_values[:, 1:]).mean()
-
-    critic_loss, critic_grads = eqx.filter_value_and_grad(critic_loss_fn)(critic)
-    return actor_grads, critic_grads, actor_loss, critic_loss
-
-
 @eqx.filter_jit
 def update_actor_critic(
     rollout_fn: types.RolloutFn,
@@ -213,14 +178,34 @@ def update_actor_critic(
     discount: float,
     lambda_: float,
 ) -> ActorCriticStepResults:
-    actor_grads, critic_grads, actor_loss, critic_loss = actor_critic_grads(
-        rollout_fn, horizon, initial_states, actor, critic, key, discount, lambda_
-    )
+    def actor_loss_fn(
+        actor: ContinuousActor,
+    ) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
+        traj_key, policy_key = jax.random.split(key, 2)
+        policy = lambda state: actor.act(state, key=policy_key)
+        trajectories = jax.vmap(rollout_fn, (None, 0, None, None))(
+            horizon, initial_states, traj_key, policy
+        )
+        # vmap over batch and time axes.
+        bootstrap_values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
+        lambda_values = eqx.filter_vmap(compute_lambda_values)(
+            bootstrap_values, trajectories.reward, discount, lambda_
+        )
+        return -lambda_values.mean(), (trajectories, lambda_values)
+
+    rest, grads = eqx.filter_value_and_grad(actor_loss_fn, has_aux=True)(actor)
+    actor_loss, (trajectories, lambda_values) = rest
     new_actor, new_actor_state = actor_learner.grad_step(
-        actor, actor_grads, actor_learning_state
+        actor, grads, actor_learning_state
     )
+
+    def critic_loss_fn(critic: Critic) -> jax.Array:
+        values = jax.vmap(jax.vmap(critic))(trajectories.next_state[:, :-1])
+        return l2_loss(values, lambda_values[:, 1:]).mean()
+
+    critic_loss, grads = eqx.filter_value_and_grad(critic_loss_fn)(critic)
     new_critic, new_critic_state = critic_learner.grad_step(
-        critic, critic_grads, critic_learning_state
+        critic, grads, critic_learning_state
     )
     return ActorCriticStepResults(
         new_actor,
@@ -265,35 +250,27 @@ def taskwise_update_actor_critic(
     discount: float,
     lambda_: float,
 ):
-    actor_critic_grads_fn = eqx.filter_vmap(
-        lambda i, a, c, m: actor_critic_grads(
+    update_actor_critic_fn = eqx.filter_vmap(
+        lambda i, a, c, m, s_a, c_a: update_actor_critic(
             sample_per_task(m),
             horizon,
             i,
             a,
             c,
+            s_a,
+            c_a,
+            actor_learner,
+            critic_learner,
             key,
             discount,
             lambda_,
         )
     )
-    actor_grads, critic_grads, actor_loss, critic_loss = actor_critic_grads_fn(
+    return update_actor_critic_fn(
         initial_states,
         actor,
         critic,
         rollout_fn,
-    )
-    new_actor, new_actor_state = actor_learner.grad_step(
-        actor, actor_grads, actor_learning_state
-    )
-    new_critic, new_critic_state = critic_learner.grad_step(
-        critic, critic_grads, critic_learning_state
-    )
-    return ActorCriticStepResults(
-        new_actor,
-        new_critic,
-        new_actor_state,
-        new_critic_state,
-        actor_loss,
-        critic_loss,
+        actor_learning_state,
+        critic_learning_state,
     )
