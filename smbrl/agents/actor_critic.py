@@ -97,9 +97,12 @@ class ModelBasedActorCritic:
         else:
             batched = False
             self.actor = ContinuousActor(
-                state_dim=state_dim, action_dim=action_dim, **actor_config
+                state_dim=state_dim,
+                action_dim=action_dim,
+                **actor_config,
+                key=actor_key
             )
-            self.critic = Critic(state_dim=state_dim, **critic_config)
+            self.critic = Critic(state_dim=state_dim, **critic_config, key=critic_key)
         self.actor_learner = Learner(self.actor, actor_optimizer_config, batched)
         self.critic_learner = Learner(self.critic, critic_optimizer_config, batched)
         self.horizon = horizon
