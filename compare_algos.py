@@ -12,7 +12,7 @@ from optax import l2_loss
 
 from smbrl.agents import model_learning as ml
 from smbrl.agents.asmbrl import PACOHLearner as PCHLearner
-from smbrl.agents.models import FeedForwardModel, S4Model
+from smbrl.agents.models import FeedForwardModel, RecurrentModel, S4Model
 from smbrl.utils import Learner, PRNGSequence, ensemble_predict
 
 ACTION_SPACE_DIM = 1
@@ -161,6 +161,56 @@ class S4Learner:
 
         horizon = x.shape[2]
         ssm = self.model.ssm
+        vmaped_sample = jax.vmap(jax.vmap(sample))
+        pred = vmaped_sample(*split_obs_acs(x), self.hidden)
+        y_hat = flat(pred)
+        return y_hat
+
+
+class RecurrentLearner:
+    def __init__(self):
+        self.model = RecurrentModel(
+            state_dim=OBSERVATION_SPACE_DIM,
+            action_dim=ACTION_SPACE_DIM,
+            key=next(KEY),
+            n_layers=2,
+            hidden_size=64,
+        )
+        self.learner = Learner(self.model, dict(lr=3e-4))
+        self.hidden = None
+
+    def train_step(self, data):
+        (self.model, self.learner.state), loss = regression_step(
+            data, self.model, self.learner, self.learner.state
+        )
+        return loss
+
+    def adapt(self, data):
+        def unroll_step(o, a):
+            def f(carry, x):
+                prev_hidden = carry
+                observation, action = x
+                hidden, out = self.model.step(observation, action, prev_hidden)
+                return hidden, out
+
+            init_hidden = self.model.init_state
+            return jax.lax.scan(f, init_hidden, (o, a))
+
+        o, a = split_obs_acs(data[0])
+        self.hidden, _ = jax.vmap(jax.vmap(unroll_step))(o, a)
+
+    def predict(self, x):
+        def sample(o, a, h):
+            out = self.model.sample(
+                horizon,
+                o[0],
+                jax.random.PRNGKey(0),
+                a,
+                h,
+            )
+            return out
+
+        horizon = x.shape[2]
         vmaped_sample = jax.vmap(jax.vmap(sample))
         pred = vmaped_sample(*split_obs_acs(x), self.hidden)
         y_hat = flat(pred)
@@ -332,11 +382,16 @@ def run_algo(learner, train_data, test_data, steps):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--algo", default="pacoh", choices=["pacoh", "s4", "vanilla"])
+    parser.add_argument(
+        "--algo", default="recurrent", choices=["pacoh", "s4", "vanilla", "recurrent"]
+    )
     args = parser.parse_args()
-    learner = dict(pacoh=PACOHLearner, s4=S4Learner, vanilla=VanillaLearner)[
-        args.algo
-    ]()
+    learner = dict(
+        pacoh=PACOHLearner,
+        s4=S4Learner,
+        vanilla=VanillaLearner,
+        recurrent=RecurrentLearner,
+    )[args.algo]()
     train_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(0, 150))
     train_loader = dataloader(train_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
     test_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(150, None))
