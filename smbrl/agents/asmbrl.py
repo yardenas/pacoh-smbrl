@@ -198,7 +198,7 @@ class ASMBRL(AgentBase):
         self.logger["agent/model/posterior_logprobs"] = float(logprobs)
         self.update_actor_critic()
 
-    def update_actor_critic(self):
+    def update_actor_critic(self) -> None:
         for batch in self.fast_buffer.sample(
             self.config.agent.actor_critic_update_steps
         ):

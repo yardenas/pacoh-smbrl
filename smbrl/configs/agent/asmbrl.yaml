@@ -32,16 +32,16 @@ critic_optimizer:
   clip: 0.5
 update_steps: 200
 pacoh:
-  num_examples: 100
+  num_examples: 200
   n_particles: 3
-  posterior_stddev: 0.01
+  posterior_stddev: 0.5
   n_prior_samples: 5
-  prior_weight: 1e-4
-  bandwidth: 1000.
+  prior_weight: 1e-3
+  bandwidth: 10.
 posterior:
-  update_steps: 100
-  num_examples: 100
-  n_prior_samples: 5
+  update_steps: 250
+  num_examples: 250
+  n_prior_samples: 1
   learning_rate: 3e-4
-  prior_weight: 1e-7
-  bandwidth: 1000
+  prior_weight: 1e-3
+  bandwidth: 10.

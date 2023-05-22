@@ -121,13 +121,14 @@ def meta_mll(
             jnp.asarray(jax.random.split(key, n_prior_samples))
         )
         y_hat, stddevs = ensemble_predict(prior_samples)(x)
-        log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(
-            y[None]
-        )
+        # log_likelihood = distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(
+        #     y[None]
+        # )
+        log_likelihood = -optax.l2_loss(y_hat - y[None])
         batch_size = x.shape[0]
         mll = jax.scipy.special.logsumexp(
             log_likelihood, axis=0, b=jnp.sqrt(batch_size)
-        )
+        ).mean()
         return mll
 
     # vmap estimate_mll over the task batch dimension, as specified
@@ -145,6 +146,7 @@ def mll(batch_x, batch_y, model, prior, prior_weight):
     log_likelihood = (
         distrax.MultivariateNormalDiag(y_hat, stddevs).log_prob(batch_y).mean()
     )
+    log_likelihood = -optax.l2_loss(y_hat - batch_y)
     log_prior = prior.log_prob(model)
     return log_likelihood.mean() + log_prior * prior_weight
 
