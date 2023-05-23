@@ -19,8 +19,8 @@ from smbrl.utils import Learner, PRNGSequence, ensemble_predict
 ACTION_SPACE_DIM = 1
 OBSERVATION_SPACE_DIM = 3
 BATCH_SIZE = 32
-CONTEXT = 24
-SEQUENCE_LENGTH = 84
+CONTEXT = 48
+SEQUENCE_LENGTH = 128
 
 
 SEED = 102
@@ -208,9 +208,9 @@ class RSSMLearner:
             state_dim=OBSERVATION_SPACE_DIM,
             action_dim=ACTION_SPACE_DIM,
             key=next(KEY),
-            stochastic_size=32,
-            deterministic_size=64,
-            hidden_size=64,
+            stochastic_size=60,
+            deterministic_size=200,
+            hidden_size=200,
         )
         self.learner = Learner(self.model, dict(lr=3e-4))
         self.hidden = None
@@ -221,7 +221,7 @@ class RSSMLearner:
         o, r = split_obs_acs(data[1])
         features = Features(o, r, jnp.zeros_like(r))
         (self.model, self.learner.state), (loss, rest) = variational_step(
-            features, a, self.model, self.learner, self.learner.state, next(KEY), 1e-4
+            features, a, self.model, self.learner, self.learner.state, next(KEY), 0.5
         )
         print(rest)
         return loss
@@ -351,26 +351,31 @@ def run_algo(learner, train_data, test_data, steps):
         loss = learner.train_step(batch)
         loss = loss.item()
         print(f"step={step}, loss={loss}")
-        if step % 100 == 0:
-            context, (x, y) = split_context(*next(test_data), CONTEXT)
-            learner.adapt(context)
-            y_hat = learner.predict(x)
-            mse = l2_loss(y_hat, y).mean().item()
-            print(f"MSE={mse}")
-            results[str(step)] = {
-                "mse": mse,
-                "context": context,
-                "y": y,
-                "y_hat": y_hat,
-            }
-            plot(
-                context[1],
-                y,
-                y_hat,
-                CONTEXT,
-                str(os.path.join(result_dir, f"{step}.png")),
-            )
+        if step % 200 == 0:
+            test(learner, test_data, result_dir, results, step)
+    test(learner, test_data, result_dir, results, step)
     save_results(os.path.join(result_dir, f"results_{SEED}"), results)
+
+
+def test(learner, test_data, result_dir, results, step):
+    context, (x, y) = split_context(*next(test_data), CONTEXT)
+    learner.adapt(context)
+    y_hat = learner.predict(x)
+    mse = l2_loss(y_hat, y).mean().item()
+    print(f"MSE={mse}")
+    results[str(step)] = {
+        "mse": mse,
+        "context": context,
+        "y": y,
+        "y_hat": y_hat,
+    }
+    plot(
+        context[1],
+        y,
+        y_hat,
+        CONTEXT,
+        str(os.path.join(result_dir, f"{step}.png")),
+    )
 
 
 def main():

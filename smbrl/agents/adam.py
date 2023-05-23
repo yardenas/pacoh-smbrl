@@ -241,6 +241,7 @@ class WorldModel(eqx.Module):
         return out
 
 
+@eqx.filter_jit
 def variational_step(
     features: Features,
     actions: jax.Array,
@@ -256,7 +257,7 @@ def variational_step(
         priors = dtx.MultivariateNormalDiag(*priors)
         posteriors = dtx.MultivariateNormalDiag(*posteriors)
         reconstruction_loss = l2_loss(outs, features.flatten()).mean()
-        kl_loss = balanced_kl_loss(posteriors, priors, 3.0, 0.8).mean()
+        kl_loss = balanced_kl_loss(posteriors, priors, 1.0, 0.8).mean()
         return reconstruction_loss + beta * kl_loss, dict(
             reconstruction_loss=reconstruction_loss, kl_loss=kl_loss
         )
