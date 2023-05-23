@@ -220,9 +220,10 @@ class RSSMLearner:
         _, a = split_obs_acs(data[0])
         o, r = split_obs_acs(data[1])
         features = Features(o, r, jnp.zeros_like(r))
-        (self.model, self.learner.state), loss = variational_step(
-            features, a, self.model, self.learner, self.learner.state, next(KEY), 2.0
+        (self.model, self.learner.state), (loss, rest) = variational_step(
+            features, a, self.model, self.learner, self.learner.state, next(KEY), 1e-4
         )
+        print(rest)
         return loss
 
     def adapt(self, data):
@@ -381,9 +382,9 @@ def main():
     learner = dict(
         pacoh=PACOHLearner, s4=S4Learner, vanilla=VanillaLearner, rssm=RSSMLearner
     )[args.algo]()
-    train_data = get_data("data-200-single.npz", SEQUENCE_LENGTH, split=slice(0, 150))
+    train_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(0, 150))
     train_loader = dataloader(train_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
-    test_data = get_data("data-200-single.npz", SEQUENCE_LENGTH, split=slice(150, None))
+    test_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(150, None))
     test_loader = dataloader(test_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
     run_algo(learner, train_loader, test_loader, 1000)
 
