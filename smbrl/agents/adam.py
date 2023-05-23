@@ -1,12 +1,14 @@
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 import distrax as dtx
 import equinox as eqx
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
+from optax import OptState, l2_loss
 
 from smbrl.types import Prediction
+from smbrl.utils import Learner
 
 
 class State(NamedTuple):
@@ -25,18 +27,10 @@ class Features(NamedTuple):
     def flatten(self):
         return jnp.concatenate([self.observation, self.reward, self.cost], axis=-1)
 
-    @classmethod
-    def from_flat(cls, flat):
-        return cls(*jnp.split(flat, [-1, 1, 1], axis=-1))
-
 
 class ShiftScale(NamedTuple):
     loc: jax.Array
     scale: jax.Array
-
-
-def to_ins(stochastic: jax.Array, features: Features) -> jax.Array:
-    return jnp.concatenate([stochastic, *features], axis=-1)
 
 
 class Prior(eqx.Module):
@@ -55,7 +49,7 @@ class Prior(eqx.Module):
     ):
         encoder_key, cell_key, decoder1_key, decoder2_key = jax.random.split(key, 4)
         self.encoder = eqx.nn.Linear(
-            stochastic_size + action_dim + 2, deterministic_size, key=encoder_key
+            stochastic_size + action_dim, deterministic_size, key=encoder_key
         )
         self.cell = eqx.nn.GRUCell(deterministic_size, deterministic_size, key=cell_key)
         self.decoder1 = eqx.nn.Linear(deterministic_size, hidden_size, key=decoder1_key)
@@ -66,7 +60,7 @@ class Prior(eqx.Module):
     def __call__(
         self, prev_state: State, action: jax.Array
     ) -> tuple[dtx.Normal, jax.Array]:
-        x = to_ins(prev_state.stochastic, action)
+        x = jnp.concatenate([prev_state.stochastic, action], -1)
         x = jnn.elu(self.encoder(x))
         hidden = self.cell(x, prev_state.deterministic)
         x = jnn.elu(self.decoder1(hidden))
@@ -85,12 +79,12 @@ class Posterior(eqx.Module):
         deterministic_size: int,
         stochastic_size: int,
         hidden_size: int,
-        observation_dim: int,
+        embedding_size: int,
         key: jax.random.KeyArray,
     ):
         encoder_key, decoder_key = jax.random.split(key)
         self.encoder = eqx.nn.Linear(
-            deterministic_size + observation_dim, hidden_size, key=encoder_key
+            deterministic_size + embedding_size, hidden_size, key=encoder_key
         )
         self.decoder = eqx.nn.Linear(hidden_size, stochastic_size * 2, key=decoder_key)
 
@@ -106,13 +100,15 @@ class Posterior(eqx.Module):
 class RSSM(eqx.Module):
     prior: Prior
     posterior: Posterior
+    deterministic_size: int
+    stochastic_size: int
 
     def __init__(
         self,
         deterministic_size: int,
         stochastic_size: int,
         hidden_size: int,
-        observation_dim: int,
+        embedding_size: int,
         action_dim: int,
         key: jax.random.KeyArray,
     ):
@@ -124,7 +120,7 @@ class RSSM(eqx.Module):
             deterministic_size,
             stochastic_size,
             hidden_size,
-            observation_dim,
+            embedding_size,
             posterior_key,
         )
         self.deterministic_size = deterministic_size
@@ -151,8 +147,10 @@ class RSSM(eqx.Module):
         return State(stochastic, deterministic), prior, posterior
 
     @property
-    def init(self):
-        return jnp.zeros(self.deterministic_size + self.stochastic_size)
+    def init(self) -> State:
+        return State(
+            jnp.zeros(self.stochastic_size), jnp.zeros(self.deterministic_size)
+        )
 
 
 class WorldModel(eqx.Module):
@@ -164,7 +162,6 @@ class WorldModel(eqx.Module):
         self,
         state_dim,
         action_dim,
-        n_layers,
         deterministic_size,
         stochastic_size,
         hidden_size,
@@ -176,17 +173,21 @@ class WorldModel(eqx.Module):
             deterministic_size,
             stochastic_size,
             hidden_size,
-            state_dim,
+            hidden_size,
             action_dim,
             cell_key,
         )
-        self.encoder = eqx.nn.Linear(
-            state_dim + action_dim, hidden_size, key=encoder_key
+        self.encoder = eqx.nn.Linear(state_dim + 1 + 1, hidden_size, key=encoder_key)
+        self.decoder = eqx.nn.Linear(
+            hidden_size + stochastic_size, state_dim + 1 + 1, key=decoder_key
         )
-        self.decoder = eqx.nn.Linear(hidden_size, state_dim + 1, key=decoder_key)
 
     def __call__(
-        self, features: Features, actions: jax.Array, key: jax.random.KeyArray
+        self,
+        features: Features,
+        actions: jax.Array,
+        key: jax.random.KeyArray,
+        init_state: Optional[State] = None,
     ) -> tuple[State, jax.Array, ShiftScale, ShiftScale]:
         obs_embeddings = jax.vmap(self.encoder)(features.flatten())
 
@@ -201,7 +202,7 @@ class WorldModel(eqx.Module):
         keys = jax.random.split(key, obs_embeddings.shape[0])
         last_state, (states, priors, posteriors) = jax.lax.scan(
             fn,
-            self.cell.init,
+            init_state if init_state is not None else self.cell.init,
             (obs_embeddings, actions, keys),
         )
         outs = jax.vmap(self.decoder)(states.flatten())
@@ -230,10 +231,44 @@ class WorldModel(eqx.Module):
             prev_action, key = inputs
             state = self.cell.predict(prev_state, prev_action, key)
             out = self.decoder(state.flatten())
-            out = Prediction(out[:-1], out[-1])
+            # FIXME (yarden): don't hardcode this.
+            out = Prediction(out[:-2], out[-2])
             return state, out
 
         assert horizon == action_sequence.shape[0]
         keys = jax.random.split(key, horizon)
         _, out = jax.lax.scan(f, state, (action_sequence, keys))
         return out
+
+
+def variational_step(
+    features: Features,
+    actions: jax.Array,
+    model: WorldModel,
+    learner: Learner,
+    opt_state: OptState,
+    key: jax.random.KeyArray,
+    beta: float = 1.0,
+):
+    def loss_fn(model):
+        infer = lambda features, actions: model(features, actions, key)
+        _, outs, priors, posteriors = eqx.filter_vmap(infer)(features, actions)
+        priors = dtx.MultivariateNormalDiag(*priors)
+        posteriors = dtx.MultivariateNormalDiag(*posteriors)
+        recounstruction_loss = l2_loss(outs, features.flatten()).mean()
+        kl_loss = balanced_kl_loss(posteriors, priors, 3.0, 0.8).mean()
+        return recounstruction_loss + beta * kl_loss
+
+    loss, model_grads = eqx.filter_value_and_grad(loss_fn)(model)
+    new_model, new_opt_state = learner.grad_step(model, model_grads, opt_state)
+    return (new_model, new_opt_state), loss
+
+
+# https://github.com/danijar/dreamerv2/blob/259e3faa0e01099533e29b0efafdf240adeda4b5/common/nets.py#L130
+def balanced_kl_loss(
+    posterior: dtx.Distribution, prior: dtx.Distribution, free_nats: float, mix: float
+) -> jnp.ndarray:
+    sg = lambda x: jax.tree_map(jax.lax.stop_gradient, x)
+    lhs = posterior.kl_divergence(sg(prior)).astype(jnp.float32).mean()
+    rhs = sg(posterior).kl_divergence(prior).astype(jnp.float32).mean()
+    return (1.0 - mix) * jnp.maximum(lhs, free_nats) + mix * jnp.maximum(rhs, free_nats)

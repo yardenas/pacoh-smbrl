@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 from optax import l2_loss
 
 from smbrl.agents import model_learning as ml
+from smbrl.agents.adam import Features, WorldModel, variational_step
 from smbrl.agents.asmbrl import PACOHLearner as PCHLearner
 from smbrl.agents.models import FeedForwardModel, S4Model
 from smbrl.utils import Learner, PRNGSequence, ensemble_predict
@@ -201,6 +202,47 @@ class VanillaLearner:
         return y_hat
 
 
+class RSSMLearner:
+    def __init__(self):
+        self.model = WorldModel(
+            state_dim=OBSERVATION_SPACE_DIM,
+            action_dim=ACTION_SPACE_DIM,
+            key=next(KEY),
+            stochastic_size=32,
+            deterministic_size=64,
+            hidden_size=64,
+        )
+        self.learner = Learner(self.model, dict(lr=3e-4))
+        self.hidden = None
+
+    def train_step(self, data):
+        data = tuple(map(lambda x: x.reshape(-1, *x.shape[2:]), data))
+        _, a = split_obs_acs(data[0])
+        o, r = split_obs_acs(data[1])
+        features = Features(o, r, jnp.zeros_like(r))
+        (self.model, self.learner.state), loss = variational_step(
+            features, a, self.model, self.learner, self.learner.state, next(KEY), 2.0
+        )
+        return loss
+
+    def adapt(self, data):
+        _, a = split_obs_acs(data[0])
+        o, r = split_obs_acs(data[1])
+        features = Features(o, r, jnp.zeros_like(r))
+        infer = lambda features, actions: self.model(features, actions, next(KEY))
+        self.hidden, *_ = jax.vmap(jax.vmap((infer)))(features, a)
+
+    def predict(self, x):
+        horizon = x.shape[2]
+        _, a = split_obs_acs(x)
+        sample = lambda state, actions: self.model.sample(
+            horizon, state, actions, next(KEY)
+        )
+        pred = jax.vmap(jax.vmap(sample))(self.hidden, a)
+        y_hat = flat(pred)
+        return y_hat
+
+
 def dataloader(arrays, batch_size, *, key):
     dataset_size = arrays[0].shape[0]
     assert all(array.shape[0] == dataset_size for array in arrays)
@@ -332,14 +374,16 @@ def run_algo(learner, train_data, test_data, steps):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--algo", default="pacoh", choices=["pacoh", "s4", "vanilla"])
+    parser.add_argument(
+        "--algo", default="rssm", choices=["pacoh", "s4", "vanilla", "rssm"]
+    )
     args = parser.parse_args()
-    learner = dict(pacoh=PACOHLearner, s4=S4Learner, vanilla=VanillaLearner)[
-        args.algo
-    ]()
-    train_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(0, 150))
+    learner = dict(
+        pacoh=PACOHLearner, s4=S4Learner, vanilla=VanillaLearner, rssm=RSSMLearner
+    )[args.algo]()
+    train_data = get_data("data-200-single.npz", SEQUENCE_LENGTH, split=slice(0, 150))
     train_loader = dataloader(train_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
-    test_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(150, None))
+    test_data = get_data("data-200-single.npz", SEQUENCE_LENGTH, split=slice(150, None))
     test_loader = dataloader(test_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
     run_algo(learner, train_loader, test_loader, 1000)
 
