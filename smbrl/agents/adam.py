@@ -253,27 +253,14 @@ def variational_step(
 ):
     def loss_fn(model):
         infer = lambda features, actions: model(features, actions, key)
-        _, outs, priors, posteriors = eqx.filter_vmap(infer)(features, actions)
-        priors = dtx.MultivariateNormalDiag(*priors)
-        posteriors = dtx.MultivariateNormalDiag(*posteriors)
+        _, outs, prior, posterior = eqx.filter_vmap(infer)(features, actions)
+        prior = dtx.MultivariateNormalDiag(*prior)
+        posterior = dtx.MultivariateNormalDiag(*posterior)
         reconstruction_loss = l2_loss(outs, features.flatten()).mean()
-        kl_loss = balanced_kl_loss(posteriors, priors, 1.0, 0.8).mean()
-        return reconstruction_loss + beta * kl_loss, dict(
-            reconstruction_loss=reconstruction_loss, kl_loss=kl_loss
-        )
+        kl_loss = jnp.maximum(posterior.kl_divergence(prior), 1.0).mean()
+        extra = dict(reconstruction_loss=reconstruction_loss, kl_loss=kl_loss)
+        return reconstruction_loss + beta * kl_loss, extra
 
     (loss, rest), model_grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model)
     new_model, new_opt_state = learner.grad_step(model, model_grads, opt_state)
     return (new_model, new_opt_state), (loss, rest)
-
-
-# https://github.com/danijar/dreamerv2/blob/259e3faa0e01099533e29b0efafdf240adeda4b5/common/nets.py#L130
-def balanced_kl_loss(
-    posterior: dtx.Distribution, prior: dtx.Distribution, free_nats: float, mix: float
-) -> jnp.ndarray:
-    # sg = lambda x: jax.tree_map(jax.lax.stop_gradient, x)
-    # lhs = posterior.kl_divergence(sg(prior)).astype(jnp.float32).mean()
-    # rhs = sg(posterior).kl_divergence(prior).astype(jnp.float32).mean()
-    # return (1.0 - mix) * jnp.maximum(lhs, free_nats) +
-    # mix * jnp.maximum(rhs, free_nats)
-    return jnp.maximum(posterior.kl_divergence(prior), free_nats)

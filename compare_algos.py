@@ -208,11 +208,11 @@ class RSSMLearner:
             state_dim=OBSERVATION_SPACE_DIM,
             action_dim=ACTION_SPACE_DIM,
             key=next(KEY),
-            stochastic_size=60,
-            deterministic_size=200,
-            hidden_size=200,
+            stochastic_size=32,
+            deterministic_size=64,
+            hidden_size=64,
         )
-        self.learner = Learner(self.model, dict(lr=3e-4))
+        self.learner = Learner(self.model, dict(lr=1e-4))
         self.hidden = None
 
     def train_step(self, data):
@@ -221,7 +221,7 @@ class RSSMLearner:
         o, r = split_obs_acs(data[1])
         features = Features(o, r, jnp.zeros_like(r))
         (self.model, self.learner.state), (loss, rest) = variational_step(
-            features, a, self.model, self.learner, self.learner.state, next(KEY), 0.5
+            features, a, self.model, self.learner, self.learner.state, next(KEY), 0.01
         )
         print(rest)
         return loss
