@@ -211,12 +211,12 @@ class RSSMLearner:
             stochastic_size=32,
             deterministic_size=64,
             hidden_size=64,
+            sequence_length=SEQUENCE_LENGTH,
         )
         self.learner = Learner(self.model, dict(lr=1e-4))
         self.hidden = None
 
     def train_step(self, data):
-        data = tuple(map(lambda x: x.reshape(-1, *x.shape[2:]), data))
         _, a = split_obs_acs(data[0])
         o, r = split_obs_acs(data[1])
         features = Features(o, r, jnp.zeros_like(r))
