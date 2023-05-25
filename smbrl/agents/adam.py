@@ -110,11 +110,16 @@ class RSSM(eqx.Module):
         hidden_size: int,
         embedding_size: int,
         action_dim: int,
+        context_dim: int,
         key: jax.random.KeyArray,
     ):
         prior_key, posterior_key = jax.random.split(key)
         self.prior = Prior(
-            deterministic_size, stochastic_size, hidden_size, action_dim, prior_key
+            deterministic_size,
+            stochastic_size,
+            hidden_size,
+            action_dim + context_dim,
+            prior_key,
         )
         self.posterior = Posterior(
             deterministic_size,
@@ -150,6 +155,7 @@ class RSSM(eqx.Module):
     ) -> tuple[State, ShiftScale, ShiftScale]:
         if context is None:
             context = jnp.zeros_like(action[..., :-1])
+        action = jnp.concatenate([action, context], -1)
         prior, deterministic = self.prior(prev_state, action)
         state = State(prev_state.stochastic, deterministic)
         posterior = self.posterior(state, embeddings)
@@ -178,7 +184,7 @@ class DomainContext(eqx.Module):
         sequence_length: int,
         key: jax.random.KeyArray,
     ):
-        self.norm = eqx.nn.LayerNorm(1)
+        self.norm = eqx.nn.LayerNorm(input_size)
         encoder_key, temporal_summary_key, decoder_key = jax.random.split(key, 3)
         self.encoder = eqx.nn.MultiheadAttention(
             num_heads,
@@ -200,7 +206,7 @@ class DomainContext(eqx.Module):
         encode = lambda x: self.encoder(x, x, x, mask=causal_mask)
         x = jax.vmap(encode)(x)
         x = x.mean(0)
-        x = jax.vmap(self.temporal_summary, 1, 1)(x).squeeze(0)
+        x = jnn.elu(jax.vmap(self.temporal_summary, 1, 1)(x).squeeze(0))
         x = self.decoder(x)
         mu, stddev = jnp.split(x, 2, -1)
         stddev = jnn.softplus(stddev) + 0.1
@@ -234,17 +240,18 @@ class WorldModel(eqx.Module):
         key
     ):
         cell_key, context_key, encoder_key, decoder_key = jax.random.split(key, 4)
+        context_size = 32
         self.cell = RSSM(
             deterministic_size,
             stochastic_size,
             hidden_size,
             hidden_size,
             action_dim,
+            context_size,
             cell_key,
         )
-        context_size = 32
         self.context = DomainContext(
-            2, state_dim + 1 + 1, 64, context_size, sequence_length, key=context_key
+            1, state_dim + 1 + 1, 64, context_size, sequence_length, key=context_key
         )
         self.encoder = eqx.nn.Linear(state_dim + 1 + 1, hidden_size, key=encoder_key)
         self.decoder = eqx.nn.Linear(
@@ -255,23 +262,17 @@ class WorldModel(eqx.Module):
         self,
         features: Features,
         actions: jax.Array,
+        context: jax.Array,
         key: jax.random.KeyArray,
         init_state: Optional[State] = None,
-    ) -> WorldModelOuts:
-        prior_features = jax.tree_map(lambda x: x[:-1], features)
-        context_prior = self.context(prior_features)
-        context_posterior = self.context(features)
-        key, context_key = jax.random.split(key)
-        features = jax.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), features)
-        actions = actions.reshape(-1, *actions.shape[2:])
+    ) -> tuple[State, jax.Array, ShiftScale, ShiftScale]:
         obs_embeddings = jax.vmap(self.encoder)(features.flatten())
-        c = dtx.Normal(*context_posterior).sample(seed=context_key)
 
         def fn(carry, inputs):
             prev_state = carry
             embedding, prev_action, key = inputs
             state, prior, posterior = self.cell.filter(
-                prev_state, embedding, prev_action, key, c
+                prev_state, embedding, prev_action, key, context
             )
             return state, (state, prior, posterior)
 
@@ -282,32 +283,35 @@ class WorldModel(eqx.Module):
             (obs_embeddings, actions, keys),
         )
         outs = jax.vmap(self.decoder)(states.flatten())
-        return WorldModelOuts(
-            context_prior, context_posterior, priors, posteriors, last_state, outs
-        )
+        return last_state, outs, priors, posteriors
 
     def step(
         self,
         state: State,
         features: Features,
         action: jax.Array,
+        context: jax.Array,
         key: jax.random.KeyArray,
     ) -> State:
         obs_embeddings = self.encoder(features.flatten())
-        state, *_ = self.cell.filter(state, obs_embeddings, action, key)
+        state, *_ = self.cell.filter(state, obs_embeddings, action, key, context)
         return state
+
+    def infer_context(self, features: Features) -> ShiftScale:
+        return self.context(features)
 
     def sample(
         self,
         horizon: int,
         state: State,
         action_sequence: jax.Array,
+        context: jax.Array,
         key: jax.random.KeyArray,
     ) -> Prediction:
         def f(carry, inputs):
             prev_state = carry
             prev_action, key = inputs
-            state = self.cell.predict(prev_state, prev_action, key)
+            state = self.cell.predict(prev_state, prev_action, key, context)
             out = self.decoder(state.flatten())
             # FIXME (yarden): don't hardcode this.
             out = Prediction(out[:-2], out[-2])
@@ -330,15 +334,13 @@ def variational_step(
     beta: float = 1.0,
 ):
     def loss_fn(model):
-        infer = lambda features, actions: model(features, actions, key)
-        outs = eqx.filter_vmap(infer)(features, actions)
+        infer_fn = eqx.filter_vmap(lambda f, a: infer(f, a, model, key))
+        outs, context_posterior, context_prior, posteriors, priors = infer_fn(
+            features, actions
+        )
         reconstruction_loss = l2_loss(outs, features.flatten()).mean()
-        dynamics_kl_loss = kl_divergence(
-            outs.dynamics_posterior, outs.dynamics_prior, 0.1
-        ).mean()
-        context_kl_loss = kl_divergence(
-            outs.context_posterior, outs.context_prior
-        ).mean()
+        dynamics_kl_loss = kl_divergence(posteriors, priors, 0.5).mean()
+        context_kl_loss = kl_divergence(context_posterior, context_prior, 0.5).mean()
         kl_loss = dynamics_kl_loss + context_kl_loss
         extra = dict(
             reconstruction_loss=reconstruction_loss,
@@ -350,6 +352,21 @@ def variational_step(
     (loss, rest), model_grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model)
     new_model, new_opt_state = learner.grad_step(model, model_grads, opt_state)
     return (new_model, new_opt_state), (loss, rest)
+
+
+def infer(
+    features: Features, actions: jax.Array, model: WorldModel, key: jax.random.KeyArray
+):
+    context_posterior = model.infer_context(features)
+    prior_features = jax.tree_map(lambda x: x[:-1], features)
+    context_prior = model.infer_context(prior_features)
+    infer_key, context_key = jax.random.split(key)
+    context = dtx.Normal(*context_posterior).sample(seed=context_key)
+    context = jnp.zeros_like(context)
+    infer_fn = lambda features, actions: model(features, actions, context, infer_key)
+    outs = eqx.filter_vmap(infer_fn)(features, actions)
+    _, outs, priors, posteriors = outs
+    return outs, priors, posteriors, context_prior, context_posterior
 
 
 def kl_divergence(

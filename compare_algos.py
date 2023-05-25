@@ -19,8 +19,8 @@ from smbrl.utils import Learner, PRNGSequence, ensemble_predict
 ACTION_SPACE_DIM = 1
 OBSERVATION_SPACE_DIM = 3
 BATCH_SIZE = 32
-CONTEXT = 48
 SEQUENCE_LENGTH = 128
+CONTEXT = 5
 
 
 SEED = 102
@@ -53,7 +53,7 @@ class PACOHLearner:
         model_factory = lambda key: FeedForwardModel(
             state_dim=OBSERVATION_SPACE_DIM,
             action_dim=ACTION_SPACE_DIM,
-            key=next(KEY),
+            key=key,
             n_layers=3,
             hidden_size=64,
         )
@@ -95,7 +95,8 @@ class PACOHLearner:
             train_data, self.posterior, train_steps, 3e-4, next(KEY), 1e-3, 10.0
         )
 
-    def predict(self, x):
+    def predict(self, data):
+        x, _ = data
         horizon = x.shape[2]
         sample = lambda m, o, a: ensemble_predict(m.sample, (None, 0, None, 0))(
             horizon,
@@ -213,8 +214,8 @@ class RSSMLearner:
             hidden_size=64,
             sequence_length=SEQUENCE_LENGTH,
         )
-        self.learner = Learner(self.model, dict(lr=1e-4))
-        self.hidden = None
+        self.learner = Learner(self.model, dict(lr=3e-4))
+        self.context = None
 
     def train_step(self, data):
         _, a = split_obs_acs(data[0])
@@ -227,21 +228,27 @@ class RSSMLearner:
         return loss
 
     def adapt(self, data):
-        _, a = split_obs_acs(data[0])
         o, r = split_obs_acs(data[1])
         features = Features(o, r, jnp.zeros_like(r))
-        infer = lambda features, actions: self.model(features, actions, next(KEY))
-        self.hidden, *_ = jax.vmap(jax.vmap((infer)))(features, a)
+        context = jax.vmap(self.model.infer_context)(features).loc
+        self.context = jnp.zeros_like(context)
 
-    def predict(self, x):
-        horizon = x.shape[2]
+    def predict(self, data):
+        x, y = data
         _, a = split_obs_acs(x)
-        sample = lambda state, actions: self.model.sample(
-            horizon, state, actions, next(KEY)
+        o, r = split_obs_acs(y)
+        features = Features(
+            o[:, 0, :CONTEXT], r[:, 0, :CONTEXT], jnp.zeros_like(r[:, 0, :CONTEXT])
         )
-        pred = jax.vmap(jax.vmap(sample))(self.hidden, a)
-        y_hat = flat(pred)
-        return y_hat
+        horizon = x.shape[2] - CONTEXT
+        infer = lambda f, a, c: self.model(f, a, c, next(KEY))
+        last_state, *_ = jax.vmap(infer)(features, a[:, 0, :CONTEXT], self.context)
+        sample = lambda actions, state, context: self.model.sample(
+            horizon, state, actions, context, next(KEY)
+        )
+        pred = jax.vmap(sample)(a[:, 0, CONTEXT:], last_state, self.context)
+        y_hat = jnp.concatenate([y[:, 0, :CONTEXT], flat(pred)], 1)
+        return y_hat[:, None]
 
 
 def dataloader(arrays, batch_size, *, key):
@@ -256,9 +263,9 @@ def dataloader(arrays, batch_size, *, key):
         while end < dataset_size:
             batch_perm = perm[start:end]
             obs, next_obs, acs, rews = tuple(array[batch_perm] for array in arrays)
-            yield np.concatenate((obs, acs), -1), np.concatenate(
-                (next_obs, rews[..., None]), -1
-            )
+            x = np.concatenate((obs, acs), -1)
+            y = np.concatenate((next_obs, rews[..., None]), -1)
+            yield x, y
             start = end
             end = start + batch_size
 
@@ -281,7 +288,7 @@ def get_data(data_path, sequence_length, split=slice(0, None)):
         all_rews.append(reward[split, :, t : t + sequence_length])
         all_acs.append(action[split, :, t : t + sequence_length])
     obs, next_obs, acs, rews = map(
-        lambda x: np.concatenate(x, axis=0), (all_obs, all_next_obs, all_acs, all_rews)  # type: ignore # noqa: E501
+        lambda x: np.concatenate(x, axis=0), (all_obs, all_next_obs, all_acs, all_rews)  # type: ignore # noqa: 501
     )
     return obs, next_obs, acs, rews
 
@@ -358,19 +365,16 @@ def run_algo(learner, train_data, test_data, steps):
 
 
 def test(learner, test_data, result_dir, results, step):
-    context, (x, y) = split_context(*next(test_data), CONTEXT)
-    learner.adapt(context)
-    y_hat = learner.predict(x)
+    data = next(test_data)
+    support = tuple(map(lambda x: x[:, :9], data))
+    x, y = map(lambda x: x[:, -1:], data)
+    learner.adapt(support)
+    y_hat = learner.predict((x, y))
+
     mse = l2_loss(y_hat, y).mean().item()
     print(f"MSE={mse}")
-    results[str(step)] = {
-        "mse": mse,
-        "context": context,
-        "y": y,
-        "y_hat": y_hat,
-    }
     plot(
-        context[1],
+        x[:, None, 0, :CONTEXT],
         y,
         y_hat,
         CONTEXT,
@@ -381,15 +385,17 @@ def test(learner, test_data, result_dir, results, step):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--algo", default="rssm", choices=["pacoh", "s4", "vanilla", "rssm"]
+        "--algo", default="pacoh", choices=["pacoh", "s4", "vanilla", "rssm"]
     )
     args = parser.parse_args()
     learner = dict(
         pacoh=PACOHLearner, s4=S4Learner, vanilla=VanillaLearner, rssm=RSSMLearner
     )[args.algo]()
-    train_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(0, 150))
+    train_data = get_data("data-200-multiple.npz", SEQUENCE_LENGTH, split=slice(0, 20))
     train_loader = dataloader(train_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
-    test_data = get_data("data-200-multi.npz", SEQUENCE_LENGTH, split=slice(150, None))
+    test_data = get_data(
+        "data-200-multiple.npz", SEQUENCE_LENGTH, split=slice(20, None)
+    )
     test_loader = dataloader(test_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
     run_algo(learner, train_loader, test_loader, 1000)
 
