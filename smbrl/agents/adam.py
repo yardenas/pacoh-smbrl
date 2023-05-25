@@ -200,7 +200,7 @@ class DomainContext(eqx.Module):
 
     def __call__(self, features: Features, actions: jax.Array) -> ShiftScale:
         x = jnp.concatenate([features.flatten(), actions], -1)
-        x = jax.vmap(jax.vmap(self.norm))(features.flatten())
+        x = jax.vmap(jax.vmap(self.norm))(x)
         causal_mask = jnp.tril(
             jnp.ones((self.encoder.num_heads, x.shape[1], x.shape[1]))
         )
@@ -252,7 +252,12 @@ class WorldModel(eqx.Module):
             cell_key,
         )
         self.context = DomainContext(
-            1, state_dim + 1 + 1, 64, context_size, sequence_length, key=context_key
+            1,
+            state_dim + 1 + 1 + action_dim,
+            64,
+            context_size,
+            sequence_length,
+            key=context_key,
         )
         self.encoder = eqx.nn.Linear(state_dim + 1 + 1, hidden_size, key=encoder_key)
         self.decoder = eqx.nn.Linear(
@@ -359,11 +364,12 @@ def infer(
     features: Features, actions: jax.Array, model: WorldModel, key: jax.random.KeyArray
 ):
     context_posterior = model.infer_context(features, actions)
-    prior_features = jax.tree_map(lambda x: x[:-1], features)
-    context_prior = model.infer_context(prior_features, actions)
+    take_prior = lambda x: jax.tree_map(lambda x: x[:-1], x)
+    prior_features = take_prior(features)
+    prior_actions = take_prior(actions)
+    context_prior = model.infer_context(prior_features, prior_actions)
     infer_key, context_key = jax.random.split(key)
     context = dtx.Normal(*context_posterior).sample(seed=context_key)
-    context = jnp.zeros_like(context)
     infer_fn = lambda features, actions: model(features, actions, context, infer_key)
     outs = eqx.filter_vmap(infer_fn)(features, actions)
     _, outs, priors, posteriors = outs

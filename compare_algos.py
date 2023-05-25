@@ -232,7 +232,7 @@ class RSSMLearner:
         o, r = split_obs_acs(data[1])
         features = Features(o, r, jnp.zeros_like(r))
         context = jax.vmap(self.model.infer_context)(features, a).loc
-        self.context = jnp.zeros_like(context)
+        self.context = context
 
     def predict(self, data):
         x, y = data
@@ -386,7 +386,7 @@ def test(learner, test_data, result_dir, results, step):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--algo", default="pacoh", choices=["pacoh", "s4", "vanilla", "rssm"]
+        "--algo", default="rssm", choices=["pacoh", "s4", "vanilla", "rssm"]
     )
     args = parser.parse_args()
     learner = dict(
