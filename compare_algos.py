@@ -10,6 +10,7 @@ import numpy as np
 from omegaconf import OmegaConf
 from optax import l2_loss
 
+from smbrl.agents import maki
 from smbrl.agents import model_learning as ml
 from smbrl.agents.adam import Features, WorldModel, variational_step
 from smbrl.agents.asmbrl import PACOHLearner as PCHLearner
@@ -189,7 +190,8 @@ class VanillaLearner:
     def adapt(self, data):
         pass
 
-    def predict(self, x):
+    def predict(self, data):
+        x, _ = data
         horizon = x.shape[2]
         sample = lambda obs, acs: self.model.sample(
             horizon,
@@ -228,8 +230,8 @@ class RSSMLearner:
         return loss
 
     def adapt(self, data):
-        _, a = split_obs_acs(data[0])
-        o, r = split_obs_acs(data[1])
+        o, a = split_obs_acs(data[0])
+        _, r = split_obs_acs(data[1])
         features = Features(o, r, jnp.zeros_like(r))
         context = jax.vmap(self.model.infer_context)(features, a).loc
         self.context = context
@@ -250,6 +252,58 @@ class RSSMLearner:
         pred = jax.vmap(sample)(a[:, 0, CONTEXT:], last_state, self.context)
         y_hat = jnp.concatenate([y[:, 0, :CONTEXT], flat(pred)], 1)
         return y_hat[:, None]
+
+
+class MakiLearner:
+    def __init__(self):
+        self.model = maki.WorldModel(
+            state_dim=OBSERVATION_SPACE_DIM,
+            action_dim=ACTION_SPACE_DIM,
+            key=next(KEY),
+            sequence_length=SEQUENCE_LENGTH,
+            n_layers=2,
+            hidden_size=64,
+            hippo_n=16,
+        )
+        self.learner = Learner(self.model, dict(lr=3e-4))
+        self.context = None
+
+    def train_step(self, data):
+        o, a = split_obs_acs(data[0])
+        next_o, r = split_obs_acs(data[1])
+        terminal = np.zeros_like(r)
+        terminal[:, :, -1] = 1
+        features = maki.Features(o, r, jnp.zeros_like(r), terminal)
+        (self.model, self.learner.state), (loss, rest) = maki.variational_step(
+            features,
+            a,
+            next_o,
+            self.model,
+            self.learner,
+            self.learner.state,
+            next(KEY),
+            0.05,
+        )
+        print(rest)
+        return loss
+
+    def adapt(self, data):
+        o, a = split_obs_acs(data[0])
+        _, r = split_obs_acs(data[1])
+        terminal = np.zeros_like(r)
+        terminal[:, :, -1] = 1
+        features = maki.Features(o, r, jnp.zeros_like(r), terminal)
+        context = jax.vmap(self.model.infer_context)(features, a).shift
+        self.context = jnp.zeros_like(context)
+
+    def predict(self, data):
+        o, a = split_obs_acs(data[0])
+        horizon = data[0].shape[2]
+        sample = lambda state, actions, context: self.model.sample(
+            horizon, state, actions, context, next(KEY)
+        )
+        pred = jax.vmap(sample)(o[:, 0, 0], a[:, 0], self.context)
+        return flat(jax.tree_map(lambda x: x[:, None], pred))
 
 
 def dataloader(arrays, batch_size, *, key):
@@ -371,7 +425,6 @@ def test(learner, test_data, result_dir, results, step):
     x, y = map(lambda x: x[:, -1:], data)
     learner.adapt(support)
     y_hat = learner.predict((x, y))
-
     mse = l2_loss(y_hat, y).mean().item()
     print(f"MSE={mse}")
     plot(
@@ -386,17 +439,19 @@ def test(learner, test_data, result_dir, results, step):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--algo", default="rssm", choices=["pacoh", "s4", "vanilla", "rssm"]
+        "--algo", default="maki", choices=["pacoh", "s4", "vanilla", "rssm", "maki"]
     )
     args = parser.parse_args()
     learner = dict(
-        pacoh=PACOHLearner, s4=S4Learner, vanilla=VanillaLearner, rssm=RSSMLearner
+        pacoh=PACOHLearner,
+        s4=S4Learner,
+        vanilla=VanillaLearner,
+        rssm=RSSMLearner,
+        maki=MakiLearner,
     )[args.algo]()
-    train_data = get_data("data-200-multiple.npz", SEQUENCE_LENGTH, split=slice(0, 20))
+    train_data = get_data("data-200-single.npz", SEQUENCE_LENGTH, split=slice(0, 150))
     train_loader = dataloader(train_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
-    test_data = get_data(
-        "data-200-multiple.npz", SEQUENCE_LENGTH, split=slice(20, None)
-    )
+    test_data = get_data("data-200-single.npz", SEQUENCE_LENGTH, split=slice(150, None))
     test_loader = dataloader(test_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
     run_algo(learner, train_loader, test_loader, 1000)
 
