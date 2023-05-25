@@ -228,9 +228,10 @@ class RSSMLearner:
         return loss
 
     def adapt(self, data):
+        _, a = split_obs_acs(data[0])
         o, r = split_obs_acs(data[1])
         features = Features(o, r, jnp.zeros_like(r))
-        context = jax.vmap(self.model.infer_context)(features).loc
+        context = jax.vmap(self.model.infer_context)(features, a).loc
         self.context = jnp.zeros_like(context)
 
     def predict(self, data):

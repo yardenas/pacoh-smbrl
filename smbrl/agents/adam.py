@@ -198,7 +198,8 @@ class DomainContext(eqx.Module):
         )
         self.decoder = eqx.nn.Linear(attention_size, context_size * 2, key=decoder_key)
 
-    def __call__(self, features: Features):
+    def __call__(self, features: Features, actions: jax.Array) -> ShiftScale:
+        x = jnp.concatenate([features.flatten(), actions], -1)
         x = jax.vmap(jax.vmap(self.norm))(features.flatten())
         causal_mask = jnp.tril(
             jnp.ones((self.encoder.num_heads, x.shape[1], x.shape[1]))
@@ -297,8 +298,8 @@ class WorldModel(eqx.Module):
         state, *_ = self.cell.filter(state, obs_embeddings, action, key, context)
         return state
 
-    def infer_context(self, features: Features) -> ShiftScale:
-        return self.context(features)
+    def infer_context(self, features: Features, actions: jax.Array) -> ShiftScale:
+        return self.context(features, actions)
 
     def sample(
         self,
@@ -357,9 +358,9 @@ def variational_step(
 def infer(
     features: Features, actions: jax.Array, model: WorldModel, key: jax.random.KeyArray
 ):
-    context_posterior = model.infer_context(features)
+    context_posterior = model.infer_context(features, actions)
     prior_features = jax.tree_map(lambda x: x[:-1], features)
-    context_prior = model.infer_context(prior_features)
+    context_prior = model.infer_context(prior_features, actions)
     infer_key, context_key = jax.random.split(key)
     context = dtx.Normal(*context_posterior).sample(seed=context_key)
     context = jnp.zeros_like(context)
