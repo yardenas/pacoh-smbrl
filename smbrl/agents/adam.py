@@ -194,7 +194,7 @@ class DomainContext(eqx.Module):
             key=encoder_key,
         )
         self.temporal_summary = eqx.nn.Linear(
-            sequence_length, 1, key=temporal_summary_key
+            sequence_length - 1, 1, key=temporal_summary_key
         )
         self.decoder = eqx.nn.Linear(attention_size, context_size * 2, key=decoder_key)
 
@@ -212,15 +212,6 @@ class DomainContext(eqx.Module):
         mu, stddev = jnp.split(x, 2, -1)
         stddev = jnn.softplus(stddev) + 0.1
         return ShiftScale(mu, stddev)
-
-
-class WorldModelOuts(NamedTuple):
-    context_prior: ShiftScale
-    context_posterior: ShiftScale
-    dynamics_prior: ShiftScale
-    dynamics_posterior: ShiftScale
-    last_state: State
-    outs: jax.Array
 
 
 class WorldModel(eqx.Module):
@@ -304,7 +295,9 @@ class WorldModel(eqx.Module):
         return state
 
     def infer_context(self, features: Features, actions: jax.Array) -> ShiftScale:
-        return self.context(features, actions)
+        c_features = jax.tree_map(lambda x: x[:, :-1], features)
+        c_actions = actions[:, 1:]
+        return self.context(c_features, c_actions)
 
     def sample(
         self,
@@ -345,8 +338,8 @@ def variational_step(
             features, actions
         )
         reconstruction_loss = l2_loss(outs, features.flatten()).mean()
-        dynamics_kl_loss = kl_divergence(posteriors, priors).mean()
-        context_kl_loss = kl_divergence(context_posterior, context_prior).mean()
+        dynamics_kl_loss = kl_divergence(posteriors, priors, 0.5).mean()
+        context_kl_loss = kl_divergence(context_posterior, context_prior, 0.5).mean()
         kl_loss = dynamics_kl_loss + context_kl_loss
         extra = dict(
             reconstruction_loss=reconstruction_loss,
