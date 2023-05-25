@@ -222,7 +222,7 @@ class RSSMLearner:
         o, r = split_obs_acs(data[1])
         features = Features(o, r, jnp.zeros_like(r))
         (self.model, self.learner.state), (loss, rest) = variational_step(
-            features, a, self.model, self.learner, self.learner.state, next(KEY), 0.01
+            features, a, self.model, self.learner, self.learner.state, next(KEY), 1e-4
         )
         print(rest)
         return loss

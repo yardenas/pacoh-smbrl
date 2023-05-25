@@ -345,8 +345,8 @@ def variational_step(
             features, actions
         )
         reconstruction_loss = l2_loss(outs, features.flatten()).mean()
-        dynamics_kl_loss = kl_divergence(posteriors, priors, 0.5).mean()
-        context_kl_loss = kl_divergence(context_posterior, context_prior, 0.5).mean()
+        dynamics_kl_loss = kl_divergence(posteriors, priors).mean()
+        context_kl_loss = kl_divergence(context_posterior, context_prior).mean()
         kl_loss = dynamics_kl_loss + context_kl_loss
         extra = dict(
             reconstruction_loss=reconstruction_loss,
@@ -364,10 +364,9 @@ def infer(
     features: Features, actions: jax.Array, model: WorldModel, key: jax.random.KeyArray
 ):
     context_posterior = model.infer_context(features, actions)
-    take_prior = lambda x: jax.tree_map(lambda x: x[:-1], x)
-    prior_features = take_prior(features)
-    prior_actions = take_prior(actions)
-    context_prior = model.infer_context(prior_features, prior_actions)
+    context_prior = ShiftScale(
+        jnp.zeros_like(context_posterior.loc), jnp.ones_like(context_posterior.scale)
+    )
     infer_key, context_key = jax.random.split(key)
     context = dtx.Normal(*context_posterior).sample(seed=context_key)
     infer_fn = lambda features, actions: model(features, actions, context, infer_key)
