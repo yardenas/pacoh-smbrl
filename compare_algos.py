@@ -1,5 +1,6 @@
 import argparse
 import os
+import pickle
 from collections import OrderedDict
 from itertools import cycle
 
@@ -339,8 +340,10 @@ def make_dir(name):
     return results_dir
 
 
-def save_results(path, data):
+def save_results(path, data, model):
     np.savez(path, **data)
+    with open(f"{path}/model.pkl", "wb") as file:
+        pickle.dump(model, file)
 
 
 class LastUpdatedOrderedDict(OrderedDict):
@@ -360,7 +363,7 @@ def run_algo(learner, train_data, test_data, steps):
         if step % 200 == 0:
             test(learner, test_data, result_dir, results, step)
     test(learner, test_data, result_dir, results, step)
-    save_results(os.path.join(result_dir, f"results_{SEED}"), results)
+    save_results(os.path.join(result_dir, f"results_{SEED}"), results, learner.model)
 
 
 def test(learner, test_data, result_dir, results, step):
@@ -369,7 +372,6 @@ def test(learner, test_data, result_dir, results, step):
     x, y = map(lambda x: x[:, -1:], data)
     learner.adapt(support)
     y_hat = learner.predict((x, y))
-
     mse = l2_loss(y_hat, y).mean().item()
     print(f"MSE={mse}")
     plot(
