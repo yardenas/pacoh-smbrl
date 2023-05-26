@@ -20,8 +20,8 @@ from smbrl.utils import Learner, PRNGSequence, ensemble_predict
 ACTION_SPACE_DIM = 1
 OBSERVATION_SPACE_DIM = 3
 BATCH_SIZE = 32
-SEQUENCE_LENGTH = 128
-CONTEXT = 5
+CONTEXT = 24
+SEQUENCE_LENGTH = 84
 
 
 SEED = 102
@@ -261,11 +261,11 @@ class MakiLearner:
             action_dim=ACTION_SPACE_DIM,
             key=next(KEY),
             sequence_length=SEQUENCE_LENGTH,
-            n_layers=2,
+            n_layers=1,
             hidden_size=64,
             hippo_n=16,
         )
-        self.learner = Learner(self.model, dict(lr=3e-4))
+        self.learner = Learner(self.model, dict(lr=1e-3))
         self.context = None
 
     def train_step(self, data):
@@ -282,7 +282,8 @@ class MakiLearner:
             self.learner,
             self.learner.state,
             next(KEY),
-            0.05,
+            0.5,
+            0.0,
         )
         print(rest)
         return loss
@@ -294,16 +295,19 @@ class MakiLearner:
         terminal[:, :, -1] = 1
         features = maki.Features(o, r, jnp.zeros_like(r), terminal)
         context = jax.vmap(self.model.infer_context)(features, a).shift
-        self.context = jnp.zeros_like(context)
+        self.context = context
 
     def predict(self, data):
         o, a = split_obs_acs(data[0])
         horizon = data[0].shape[2]
-        sample = lambda state, actions, context: self.model.sample(
-            horizon, state, actions, context, next(KEY)
+        sample = jax.vmap(
+            lambda state, actions, context: self.model.sample(
+                horizon, state, actions, context, next(KEY)
+            ),
+            (0, 0, None),
         )
-        pred = jax.vmap(sample)(o[:, 0, 0], a[:, 0], self.context)
-        return flat(jax.tree_map(lambda x: x[:, None], pred))
+        pred = jax.vmap(sample)(o[:, :, 0], a, self.context)
+        return flat(pred)
 
 
 def dataloader(arrays, batch_size, *, key):
@@ -414,26 +418,25 @@ def run_algo(learner, train_data, test_data, steps):
         loss = loss.item()
         print(f"step={step}, loss={loss}")
         if step % 200 == 0:
-            test(learner, test_data, result_dir, results, step)
-    test(learner, test_data, result_dir, results, step)
+            context, (x, y) = split_context(*next(test_data), CONTEXT)
+            learner.adapt(context)
+            y_hat = learner.predict((x, y))
+            mse = l2_loss(y_hat, y).mean().item()
+            print(f"MSE={mse}")
+            results[str(step)] = {
+                "mse": mse,
+                "context": context,
+                "y": y,
+                "y_hat": y_hat,
+            }
+            plot(
+                context[1],
+                y,
+                y_hat,
+                CONTEXT,
+                str(os.path.join(result_dir, f"{step}.png")),
+            )
     save_results(os.path.join(result_dir, f"results_{SEED}"), results)
-
-
-def test(learner, test_data, result_dir, results, step):
-    data = next(test_data)
-    support = tuple(map(lambda x: x[:, :9], data))
-    x, y = map(lambda x: x[:, -1:], data)
-    learner.adapt(support)
-    y_hat = learner.predict((x, y))
-    mse = l2_loss(y_hat, y).mean().item()
-    print(f"MSE={mse}")
-    plot(
-        x[:, None, 0, :CONTEXT],
-        y,
-        y_hat,
-        CONTEXT,
-        str(os.path.join(result_dir, f"{step}.png")),
-    )
 
 
 def main():
@@ -449,9 +452,11 @@ def main():
         rssm=RSSMLearner,
         maki=MakiLearner,
     )[args.algo]()
-    train_data = get_data("data-200-single.npz", SEQUENCE_LENGTH, split=slice(0, 150))
+    train_data = get_data("data-200-multiple.npz", SEQUENCE_LENGTH, split=slice(0, 20))
     train_loader = dataloader(train_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
-    test_data = get_data("data-200-single.npz", SEQUENCE_LENGTH, split=slice(150, None))
+    test_data = get_data(
+        "data-200-multiple.npz", SEQUENCE_LENGTH, split=slice(20, None)
+    )
     test_loader = dataloader(test_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
     run_algo(learner, train_loader, test_loader, 1000)
 
