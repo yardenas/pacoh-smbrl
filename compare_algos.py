@@ -6,6 +6,7 @@ from itertools import cycle
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 import numpy as np
 from omegaconf import OmegaConf
 from optax import l2_loss
@@ -295,10 +296,7 @@ def get_data(data_path, sequence_length, split=slice(0, None)):
 
 
 def plot(context, y, y_hat, context_t, savename):
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    t_test = np.arange(y.shape[2]) + context.shape[2]
+    t_test = np.arange(y.shape[2])
     t_context = np.arange(context.shape[2])
 
     plt.figure(figsize=(10, 5), dpi=600)
@@ -398,7 +396,7 @@ def main():
         "data-200-multiple.npz", SEQUENCE_LENGTH, split=slice(20, None)
     )
     test_loader = dataloader(test_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
-    run_algo(learner, train_loader, test_loader, 1000)
+    run_algo(learner, train_loader, test_loader, 2000)
 
 
 if __name__ == "__main__":

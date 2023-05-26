@@ -205,7 +205,7 @@ class DomainContext(eqx.Module):
             jnp.ones((self.encoder.num_heads, x.shape[1], x.shape[1]))
         )
         encode = lambda x: self.encoder(x, x, x, mask=causal_mask)
-        x = jax.vmap(encode)(x)
+        x = jnn.elu(jax.vmap(encode)(x))
         x = x.mean(0)
         x = jnn.elu(jax.vmap(self.temporal_summary, 1, 1)(x).squeeze(0))
         x = self.decoder(x)
@@ -263,7 +263,7 @@ class WorldModel(eqx.Module):
         key: jax.random.KeyArray,
         init_state: Optional[State] = None,
     ) -> tuple[State, jax.Array, ShiftScale, ShiftScale]:
-        obs_embeddings = jax.vmap(self.encoder)(features.flatten())
+        obs_embeddings = jnn.elu(jax.vmap(self.encoder)(features.flatten()))
 
         def fn(carry, inputs):
             prev_state = carry
@@ -290,7 +290,7 @@ class WorldModel(eqx.Module):
         context: jax.Array,
         key: jax.random.KeyArray,
     ) -> State:
-        obs_embeddings = self.encoder(features.flatten())
+        obs_embeddings = jnn.elu(self.encoder(features.flatten()))
         state, *_ = self.cell.filter(state, obs_embeddings, action, key, context)
         return state
 
@@ -365,7 +365,7 @@ def infer(
     infer_fn = lambda features, actions: model(features, actions, context, infer_key)
     outs = eqx.filter_vmap(infer_fn)(features, actions)
     _, outs, priors, posteriors = outs
-    return outs, priors, posteriors, context_prior, context_posterior
+    return outs, context_prior, context_posterior, priors, posteriors
 
 
 def kl_divergence(
