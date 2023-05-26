@@ -232,7 +232,7 @@ class WorldModel(eqx.Module):
         key
     ):
         cell_key, context_key, encoder_key, decoder_key = jax.random.split(key, 4)
-        context_size = 32
+        context_size = 16
         self.cell = RSSM(
             deterministic_size,
             stochastic_size,
@@ -339,7 +339,7 @@ def variational_step(
         )
         reconstruction_loss = l2_loss(outs, features.flatten()).mean()
         dynamics_kl_loss = kl_divergence(posteriors, priors, 0.5).mean()
-        context_kl_loss = kl_divergence(context_posterior, context_prior, 0.5).mean()
+        context_kl_loss = kl_divergence(context_posterior, context_prior, 0.5).mean() * 1e-5
         kl_loss = dynamics_kl_loss + context_kl_loss
         extra = dict(
             reconstruction_loss=reconstruction_loss,
