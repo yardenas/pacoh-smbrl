@@ -169,29 +169,92 @@ class RSSM(eqx.Module):
         )
 
 
-class DomainContext(eqx.Module):
+class FeedForward(eqx.Module):
     norm: eqx.nn.LayerNorm
-    encoder: eqx.nn.MultiheadAttention
+    hidden: eqx.nn.Linear
+    out: eqx.nn.Linear
+
+    def __init__(self, attention_size: int, hidden_size: int, key: jax.random.KeyArray):
+        key1, key2 = jax.random.split(key)
+        self.norm = eqx.nn.LayerNorm(attention_size)
+        self.hidden = eqx.nn.Linear(attention_size, hidden_size, key=key1)
+        self.out = eqx.nn.Linear(hidden_size, attention_size, key=key2)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        skip = x
+        x = self.relu(self.hidden(x))
+        x = skip + self.out(x)
+        x = self.norm(x)
+        return x
+
+
+class SequenceFeatures(eqx.Module):
+    norm: eqx.nn.LayerNorm
+    mha: eqx.nn.MultiheadAttention
+    ff: FeedForward
+
+    def __init__(
+        self,
+        num_heads: int,
+        attention_size: int,
+        hidden_size: int,
+        key: jax.random.KeyArray,
+    ):
+        key1, key2 = jax.random.split(key)
+        self.norm = eqx.nn.LayerNorm(attention_size)
+        self.mha = eqx.nn.MultiheadAttention(
+            num_heads,
+            attention_size,
+            inference=True,
+            key=key1,
+        )
+        self.ff = FeedForward(attention_size, hidden_size, key2)
+
+    def __call__(self, x: jax.Array, mask: jax.Array = None) -> jax.Array:
+        skip = x
+        causal_mask = jnp.tril(
+            jnp.ones((self.encoder.num_heads, x.shape[1], x.shape[1]))
+        )
+        if mask is not None:
+            mask = mask[None, None]
+        else:
+            mask = jnp.ones_like(causal_mask)
+        mask = causal_mask * mask
+        x = skip + self.mha(x, x, x, mask=causal_mask)
+        x = self.norm(x)
+        x = self.ff(x)
+        return x
+
+
+class DomainContext(eqx.Module):
+    encoder: eqx.nn.Linear
+    sequence_features: eqx.nn.Sequential
     temporal_summary: eqx.nn.Linear
     decoder: eqx.nn.Linear
 
     def __init__(
         self,
+        num_layers: int,
         num_heads: int,
         input_size: int,
         attention_size: int,
+        hidden_size: int,
         context_size: int,
         sequence_length: int,
         key: jax.random.KeyArray,
     ):
-        self.norm = eqx.nn.LayerNorm(input_size)
-        encoder_key, temporal_summary_key, decoder_key = jax.random.split(key, 3)
-        self.encoder = eqx.nn.MultiheadAttention(
-            num_heads,
-            input_size,
-            output_size=attention_size,
-            inference=True,
-            key=encoder_key,
+        (
+            encoder_key,
+            *sequence_keys,
+            temporal_summary_key,
+            decoder_key,
+        ) = jax.random.split(key, 2 + num_layers)
+        self.encoder = eqx.nn.Linear(input_size, attention_size, key=encoder_key)
+        self.sequence_features = eqx.nn.Sequential(
+            [
+                SequenceFeatures(num_heads, attention_size, hidden_size, key)
+                for key in sequence_keys
+            ]
         )
         self.temporal_summary = eqx.nn.Linear(
             sequence_length - 1, 1, key=temporal_summary_key
@@ -199,19 +262,22 @@ class DomainContext(eqx.Module):
         self.decoder = eqx.nn.Linear(attention_size, context_size * 2, key=decoder_key)
 
     def __call__(self, features: Features, actions: jax.Array) -> ShiftScale:
-        x = jnp.concatenate([features.flatten(), actions], -1)
-        x = jax.vmap(jax.vmap(self.norm))(x)
-        causal_mask = jnp.tril(
-            jnp.ones((self.encoder.num_heads, x.shape[1], x.shape[1]))
-        )
-        encode = lambda x: self.encoder(x, x, x, mask=causal_mask)
-        x = jnn.elu(jax.vmap(encode)(x))
-        x = x.mean(0)
-        x = jnn.elu(jax.vmap(self.temporal_summary, 1, 1)(x).squeeze(0))
-        x = self.decoder(x)
+        x = jax.vmap(self.task_features)(features, actions)
+        x = x.mean((0, 1))
         mu, stddev = jnp.split(x, 2, -1)
+        # TODO (yarden): maybe constrain the stddev like here:
+        # https://arxiv.org/pdf/1901.05761.pdf to enforce the size of it.
         stddev = jnn.softplus(stddev) + 0.1
         return ShiftScale(mu, stddev)
+
+    def task_features(self, features: Features, actions: jax.Array) -> jax.Array:
+        x = jnp.concatenate([features.flatten(), actions], -1)
+        x = jax.vmap(self.encoder)(x)
+        x = self.sequence_features(x)
+        x = jax.vmap(self.temporal_summary, 1, 1)(x)
+        x = jnn.relu(x)
+        x = jax.vmap(self.decoder)(x)
+        return x
 
 
 class WorldModel(eqx.Module):
@@ -232,7 +298,7 @@ class WorldModel(eqx.Module):
         key
     ):
         cell_key, context_key, encoder_key, decoder_key = jax.random.split(key, 4)
-        context_size = 16
+        context_size = 32
         self.cell = RSSM(
             deterministic_size,
             stochastic_size,
@@ -244,7 +310,9 @@ class WorldModel(eqx.Module):
         )
         self.context = DomainContext(
             1,
+            8,
             state_dim + 1 + 1 + action_dim,
+            64,
             64,
             context_size,
             sequence_length,
@@ -339,7 +407,9 @@ def variational_step(
         )
         reconstruction_loss = l2_loss(outs, features.flatten()).mean()
         dynamics_kl_loss = kl_divergence(posteriors, priors, 0.5).mean()
-        context_kl_loss = kl_divergence(context_posterior, context_prior, 0.5).mean() * 1e-5
+        context_kl_loss = (
+            kl_divergence(context_posterior, context_prior, 0.5).mean() * 1e-5
+        )
         kl_loss = dynamics_kl_loss + context_kl_loss
         extra = dict(
             reconstruction_loss=reconstruction_loss,
