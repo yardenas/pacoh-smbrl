@@ -17,10 +17,11 @@ class Features(NamedTuple):
     reward: jax.Array
     cost: jax.Array
     terminal: jax.Array
+    done: jax.Array
 
     def flatten(self):
         return jnp.concatenate(
-            [self.observation, self.reward, self.cost, self.terminal], axis=-1
+            [self.observation, self.reward, self.cost, self.terminal, self.done], axis=-1
         )
 
 
@@ -29,48 +30,95 @@ class ShiftScale(NamedTuple):
     scale: jax.Array
 
 
-class DomainContext(eqx.Module):
+class FeedForward(eqx.Module):
     norm: eqx.nn.LayerNorm
-    encoder: eqx.nn.MultiheadAttention
-    temporal_summary: eqx.nn.Linear
-    decoder: eqx.nn.Linear
+    hidden: eqx.nn.Linear
+    out: eqx.nn.Linear
+
+    def __init__(self, attention_size: int, hidden_size: int, key: jax.random.KeyArray):
+        key1, key2 = jax.random.split(key)
+        self.norm = eqx.nn.LayerNorm(attention_size)
+        self.hidden = eqx.nn.Linear(attention_size, hidden_size, key=key1)
+        self.out = eqx.nn.Linear(hidden_size, attention_size, key=key2)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        skip = x
+        x = jnn.relu(self.hidden(x))
+        x = skip + self.out(x)
+        x = self.norm(x)
+        return x
+
+
+class SequenceFeatures(eqx.Module):
+    norm: eqx.nn.LayerNorm
+    mha: eqx.nn.MultiheadAttention
+    ff: FeedForward
 
     def __init__(
         self,
         num_heads: int,
-        input_size: int,
         attention_size: int,
-        context_size: int,
-        sequence_length: int,
+        hidden_size: int,
         key: jax.random.KeyArray,
     ):
-        self.norm = eqx.nn.LayerNorm(input_size)
-        encoder_key, temporal_summary_key, decoder_key = jax.random.split(key, 3)
-        self.encoder = eqx.nn.MultiheadAttention(
+        key1, key2 = jax.random.split(key)
+        self.norm = eqx.nn.LayerNorm(attention_size)
+        self.mha = eqx.nn.MultiheadAttention(
             num_heads,
-            input_size,
-            output_size=attention_size,
+            attention_size,
             inference=True,
-            key=encoder_key,
+            key=key1,
         )
-        self.temporal_summary = eqx.nn.Linear(
-            sequence_length, 1, key=temporal_summary_key
-        )
+        self.ff = FeedForward(attention_size, hidden_size, key2)
+
+    def __call__(self, x: jax.Array, mask: jax.Array = None) -> jax.Array:
+        skip = x
+        x = skip + self.mha(x, x, x)
+        x = jax.vmap(self.norm)(x)
+        x = jax.vmap(self.ff)(x)
+        return x
+
+
+class DomainContext(eqx.Module):
+    encoder: eqx.nn.Linear
+    sequence_features: list[SequenceFeatures]
+    decoder: eqx.nn.Linear
+
+    def __init__(
+        self,
+        num_layers: int,
+        num_heads: int,
+        input_size: int,
+        attention_size: int,
+        hidden_size: int,
+        context_size: int,
+        key: jax.random.KeyArray,
+    ):
+        (
+            encoder_key,
+            *sequence_keys,
+            decoder_key,
+        ) = jax.random.split(key, 2 + num_layers)
+        self.encoder = eqx.nn.Linear(input_size, attention_size, key=encoder_key)
+        self.sequence_features = [
+            SequenceFeatures(num_heads, attention_size, hidden_size, key)
+            for key in sequence_keys
+        ]
         self.decoder = eqx.nn.Linear(attention_size, context_size * 2, key=decoder_key)
 
     def __call__(self, features: Features, actions: jax.Array) -> ShiftScale:
         x = jnp.concatenate([features.flatten(), actions], -1)
-        x = jax.vmap(jax.vmap(self.norm))(x)
-        causal_mask = jnp.tril(
-            jnp.ones((self.encoder.num_heads, x.shape[1], x.shape[1]))
-        )
-        encode = lambda x: self.encoder(x, x, x, mask=causal_mask)
-        x = jnn.elu(jax.vmap(encode)(x))
+        x = x.reshape(-1, *x.shape[2:])
+        x = jax.vmap(self.encoder)(x)
+        for layer in self.sequence_features:
+            x = layer(x)
+        # Global average pooling
         x = x.mean(0)
-        x = jnn.elu(jax.vmap(self.temporal_summary, 1, 1)(x).squeeze(0))
         x = self.decoder(x)
         mu, stddev = jnp.split(x, 2, -1)
-        stddev = jnn.softplus(stddev) + 0.1
+        # TODO (yarden): maybe constrain the stddev like here:
+        # https://arxiv.org/pdf/1901.05761.pdf to enforce the size of it.
+        stddev = jnn.sigmoid(stddev) * 0.9 + 0.1
         return ShiftScale(mu, stddev)
 
 
@@ -82,26 +130,27 @@ class WorldModel(eqx.Module):
         self,
         state_dim: int,
         action_dim: int,
-        n_layers: int,
-        hippo_n: int,
-        hidden_size: int,
-        sequence_length: int,
-        context_dim=32,
+        context_size=32,
         *,
         key: jax.random.KeyArray
     ):
-        context_key, encoder_key, decoder_key = jax.random.split(key, 3)
-        context_size = 32
+        context_key, encoder_key = jax.random.split(key, 2)
+        num_layers = 1
+        num_heads = 8
+        aux_dim = 4  # terminal, done, cost, reward
+        attention_size = 256
+        hidden_size = 256
         self.context = DomainContext(
-            1,
-            state_dim + 1 + 1 + 1 + action_dim,
-            64,
+            num_layers,
+            num_heads,
+            state_dim + aux_dim + action_dim,
+            attention_size,
+            hidden_size,
             context_size,
-            sequence_length,
             key=context_key,
         )
         self.dynamics = FeedForwardModel(
-            2, state_dim, action_dim + context_dim, 128, key=encoder_key
+            2, state_dim, action_dim + context_size, 128, key=encoder_key
         )
 
     def __call__(
@@ -168,9 +217,8 @@ def infer(
         jnp.zeros_like(context_posterior.shift), jnp.ones_like(context_posterior.scale)
     )
     context = dtx.Normal(*context_posterior).sample(seed=key)
-    context = jnp.zeros_like(context)
-    infer_fn = lambda features, actions: model(features.observation, actions, context)
-    outs = eqx.filter_vmap(infer_fn)(features, actions)
+    pred_fn = lambda features, actions: model(features.observation, actions, context)
+    outs = eqx.filter_vmap(pred_fn)(features, actions)
     return outs, context_prior, context_posterior
 
 

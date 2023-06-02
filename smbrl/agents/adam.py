@@ -182,7 +182,7 @@ class FeedForward(eqx.Module):
 
     def __call__(self, x: jax.Array) -> jax.Array:
         skip = x
-        x = self.relu(self.hidden(x))
+        x = jnn.relu(self.hidden(x))
         x = skip + self.out(x)
         x = self.norm(x)
         return x
@@ -221,8 +221,8 @@ class SequenceFeatures(eqx.Module):
             mask = jnp.ones_like(causal_mask)
         mask = causal_mask * mask
         x = skip + self.mha(x, x, x, mask=causal_mask)
-        x = self.norm(x)
-        x = self.ff(x)
+        x = jax.vmap(self.norm)(x)
+        x = jax.vmap(self.ff)(x)
         return x
 
 

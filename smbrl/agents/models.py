@@ -150,7 +150,9 @@ class S4Model(eqx.Module):
             SequenceBlock(hidden_size, hippo_n, sequence_length, key=key)
             for key in keys[:n_layers]
         ]
-        self.encoder = eqx.nn.Linear(state_dim + action_dim, hidden_size, key=keys[-2])
+        self.encoder = eqx.nn.Linear(
+            state_dim + action_dim + 1, hidden_size, key=keys[-2]
+        )
         self.decoder = eqx.nn.Linear(hidden_size, state_dim + 1, key=keys[-1])
 
     def __call__(
@@ -167,10 +169,11 @@ class S4Model(eqx.Module):
         self,
         state: jax.Array,
         action: jax.Array,
+        terminal: bool,
         layers_ssm: list[SSM],
         layers_hidden: list[jax.Array],
     ) -> tuple[list[jax.Array], Prediction]:
-        x = to_ins(state, action)
+        x = to_ins(state, jnp.concatenate([action, jnp.ones(1) * terminal], -1))
         x = self.encoder(x)
         x = x[None]
         out_hiddens = []
@@ -198,6 +201,7 @@ class S4Model(eqx.Module):
             out_hidden, out = self.step(
                 prev_state,
                 action,
+                False,
                 layers_ssm,
                 prev_hidden,
             )

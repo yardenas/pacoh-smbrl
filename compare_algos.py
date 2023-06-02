@@ -16,12 +16,14 @@ from smbrl.agents import model_learning as ml
 from smbrl.agents.adam import Features, WorldModel, variational_step
 from smbrl.agents.asmbrl import PACOHLearner as PCHLearner
 from smbrl.agents.models import FeedForwardModel, S4Model
+from smbrl.agents import maki
 from smbrl.utils import Learner, PRNGSequence, ensemble_predict
 
-ACTION_SPACE_DIM = 1
+CONTEXTUALIZE = False
+ACTION_SPACE_DIM = 1 + int(CONTEXTUALIZE)
 OBSERVATION_SPACE_DIM = 3
 BATCH_SIZE = 32
-SEQUENCE_LENGTH = 128
+SEQUENCE_LENGTH = 48
 CONTEXT = 5
 
 
@@ -123,35 +125,46 @@ class S4Learner:
             action_dim=ACTION_SPACE_DIM,
             key=next(KEY),
             sequence_length=SEQUENCE_LENGTH,
-            n_layers=2,
-            hidden_size=64,
+            n_layers=3,
+            hidden_size=256,
             hippo_n=16,
         )
         self.learner = Learner(self.model, dict(lr=1e-3))
         self.hidden = None
 
     def train_step(self, data):
+        horizon = data[0].shape[2]
+        x, y = jax.tree_map(lambda x: x.reshape(x.shape[0], -1, *x.shape[3:]), data)
+        terminals = np.zeros_like(x[..., -1:])
+        terminals[:, ::-horizon] = 1.0
+        x = np.concatenate([x, terminals], axis=-1)
         (self.model, self.learner.state), loss = regression_step(
-            data, self.model, self.learner, self.learner.state
+            (x, y), self.model, self.learner, self.learner.state
         )
         return loss
 
     def adapt(self, data):
+        # TODO (yarden): can just use the output y of ssm instead of hidden, and then no need to unroll!
         def unroll_step(o, a):
             def f(carry, x):
                 prev_hidden = carry
                 observation, action = x
-                hidden, out = self.model.step(observation, action, ssm, prev_hidden)
+                hidden, out = self.model.step(
+                    observation, action, False, ssm, prev_hidden
+                )
                 return hidden, out
 
             init_hidden = self.model.init_state
             return jax.lax.scan(f, init_hidden, (o, a))
 
         ssm = self.model.ssm
+        data = tuple(map(lambda x: x.reshape(x.shape[0], -1, x.shape[-1]), data))
         o, a = split_obs_acs(data[0])
-        self.hidden, _ = jax.vmap(jax.vmap(unroll_step))(o, a)
+        self.hidden, _ = jax.vmap(unroll_step)(o, a)
 
-    def predict(self, x):
+    def predict(self, data):
+        x, y = tuple(map(lambda x: x.reshape(x.shape[0], -1, x.shape[-1]), data))
+
         def sample(o, a, h):
             out = self.model.sample(
                 horizon,
@@ -163,12 +176,12 @@ class S4Learner:
             )
             return out
 
-        horizon = x.shape[2]
+        horizon = x.shape[1]
         ssm = self.model.ssm
-        vmaped_sample = jax.vmap(jax.vmap(sample))
+        vmaped_sample = jax.vmap(sample)
         pred = vmaped_sample(*split_obs_acs(x), self.hidden)
         y_hat = flat(pred)
-        return y_hat
+        return y_hat[:, None]
 
 
 class VanillaLearner:
@@ -178,7 +191,7 @@ class VanillaLearner:
             action_dim=ACTION_SPACE_DIM,
             key=next(KEY),
             n_layers=3,
-            hidden_size=64,
+            hidden_size=256,
         )
         self.learner = Learner(self.model, dict(lr=3e-4))
 
@@ -191,7 +204,8 @@ class VanillaLearner:
     def adapt(self, data):
         pass
 
-    def predict(self, x):
+    def predict(self, data):
+        x, y = data
         horizon = x.shape[2]
         sample = lambda obs, acs: self.model.sample(
             horizon,
@@ -199,7 +213,7 @@ class VanillaLearner:
             jax.random.PRNGKey(0),
             acs,
         )
-        vmaped_sample = jax.vmap(jax.vmap(sample))
+        vmaped_sample = jax.jit(jax.vmap(jax.vmap(sample)))
         pred = vmaped_sample(*split_obs_acs(x))
         y_hat = flat(pred)
         return y_hat
@@ -254,6 +268,61 @@ class RSSMLearner:
         return y_hat[:, None]
 
 
+class MakiLearner:
+    def __init__(self):
+        self.model = maki.WorldModel(
+            state_dim=OBSERVATION_SPACE_DIM,
+            action_dim=ACTION_SPACE_DIM,
+            context_size=64,
+            key=next(KEY),
+        )
+        self.learner = Learner(self.model, dict(lr=3e-4))
+        self.context = None
+
+    def train_step(self, data):
+        o, a = split_obs_acs(data[0])
+        n_o, r = split_obs_acs(data[1])
+        dones = np.zeros_like(r)
+        dones[:, -1::] = 1.0
+        features = maki.Features(o, r, jnp.zeros_like(r), jnp.zeros_like(r), dones)
+        (self.model, self.learner.state), (loss, rest) = maki.variational_step(
+            features,
+            a,
+            n_o,
+            self.model,
+            self.learner,
+            self.learner.state,
+            next(KEY),
+            0.01,
+        )
+        print(rest)
+        return loss
+
+    def adapt(self, data):
+        o, a = split_obs_acs(data[0])
+        _, r = split_obs_acs(data[1])
+        dones = np.zeros_like(r)
+        dones[:, -1::] = 1.0
+        features = maki.Features(o, r, jnp.zeros_like(r), jnp.zeros_like(r), dones)
+        context = jax.vmap(self.model.infer_context)(features, a).shift
+        self.context = context
+
+    def predict(self, data):
+        x, _ = data
+        o, a = split_obs_acs(x)
+        horizon = x.shape[2]
+        key = next(KEY)
+
+        def sample_fn(o, a, c):
+            # vmap over batches of sequences.
+            sample = lambda o, a: self.model.sample(horizon, o[0], a, c, key)
+            return jax.vmap(sample)(o, a)
+
+        pred = jax.vmap(sample_fn)(o, a, self.context)
+        y_hat = flat(pred)
+        return y_hat
+
+
 def dataloader(arrays, batch_size, *, key):
     dataset_size = arrays[0].shape[0]
     assert all(array.shape[0] == dataset_size for array in arrays)
@@ -274,7 +343,12 @@ def dataloader(arrays, batch_size, *, key):
 
 
 def get_data(data_path, sequence_length, split=slice(0, None)):
-    obs, action, reward = np.load(data_path).values()
+    data = np.load(data_path)
+    if len(data.values()) == 4:
+        obs, action, reward, gravity = np.load(data_path).values()
+    else:
+        assert not CONTEXTUALIZE
+        obs, action, reward = np.load(data_path).values()
 
     def normalize(x):
         mean = x.mean(axis=(0))
@@ -289,7 +363,14 @@ def get_data(data_path, sequence_length, split=slice(0, None)):
         all_obs.append(obs[split, :, t : t + sequence_length])
         all_next_obs.append(obs[split, :, t + 1 : t + sequence_length + 1])
         all_rews.append(reward[split, :, t : t + sequence_length])
-        all_acs.append(action[split, :, t : t + sequence_length])
+        if CONTEXTUALIZE:
+            acs = action[split, :, t : t + sequence_length]
+            g = np.tile(
+                gravity[split, None, None, None], (acs.shape[1], acs.shape[2], 1)
+            )
+            all_acs.append(np.concatenate((acs, g), -1))
+        else:
+            all_acs.append(action[split, :, t : t + sequence_length])
     obs, next_obs, acs, rews = map(
         lambda x: np.concatenate(x, axis=0), (all_obs, all_next_obs, all_acs, all_rews)  # type: ignore # noqa: 501
     )
@@ -328,7 +409,6 @@ def plot(context, y, y_hat, context_t, savename):
     plt.tight_layout()
     plt.savefig(savename, bbox_inches="tight")
     plt.show(block=False)
-    plt.pause(10)
     plt.close()
 
 
@@ -342,7 +422,7 @@ def make_dir(name):
 
 def save_results(path, data, model):
     np.savez(path, **data)
-    with open(f"{path}/model.pkl", "wb") as file:
+    with open(f"{path}-model.pkl", "wb") as file:
         pickle.dump(model, file)
 
 
@@ -355,25 +435,37 @@ class LastUpdatedOrderedDict(OrderedDict):
 def run_algo(learner, train_data, test_data, steps):
     result_dir = make_dir(learner.__class__.__name__)
     results = LastUpdatedOrderedDict()
-    test_data = cycle(iter(test_data))
+    maes = []
     for step, batch in zip(range(steps), train_data):
         loss = learner.train_step(batch)
         loss = loss.item()
         print(f"step={step}, loss={loss}")
         if step % 200 == 0:
-            test(learner, test_data, result_dir, results, step)
-    test(learner, test_data, result_dir, results, step)
+            mae = test(learner, iter(test_data), result_dir, results, step)
+            maes.append(mae)
+            plt.plot(np.arange(len(maes)), np.asarray(maes))
+            plt.tight_layout()
+            plt.savefig(
+                str(os.path.join(result_dir, f"loss-{step}.png")), bbox_inches="tight"
+            )
+    mae = test(learner, test_data, result_dir, results, step)
+    maes.append(mae)
     save_results(os.path.join(result_dir, f"results_{SEED}"), results, learner.model)
 
 
 def test(learner, test_data, result_dir, results, step):
-    data = next(test_data)
-    support = tuple(map(lambda x: x[:, :9], data))
-    x, y = map(lambda x: x[:, -1:], data)
-    learner.adapt(support)
-    y_hat = learner.predict((x, y))
-    mse = l2_loss(y_hat, y).mean().item()
-    print(f"MSE={mse}")
+    maes = []
+    for i, data in enumerate(test_data):
+        if i > 10:
+            break
+        support = tuple(map(lambda x: x[:, :9], data))
+        x, y = map(lambda x: x[:, -1:], data)
+        learner.adapt(support)
+        y_hat = learner.predict((x, y))
+        mae = np.abs(y_hat - y).mean().item()
+        maes.append(mae)
+    mae = np.mean(maes)
+    print(f"MAE={mae}")
     plot(
         x[:, None, 0, :CONTEXT],
         y,
@@ -381,24 +473,35 @@ def test(learner, test_data, result_dir, results, step):
         CONTEXT,
         str(os.path.join(result_dir, f"{step}.png")),
     )
+    return mae
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--algo", default="rssm", choices=["pacoh", "s4", "vanilla", "rssm"]
+        "--algo", default="s4", choices=["pacoh", "s4", "vanilla", "rssm", "maki"]
     )
     args = parser.parse_args()
     learner = dict(
-        pacoh=PACOHLearner, s4=S4Learner, vanilla=VanillaLearner, rssm=RSSMLearner
+        pacoh=PACOHLearner,
+        s4=S4Learner,
+        vanilla=VanillaLearner,
+        rssm=RSSMLearner,
+        maki=MakiLearner,
     )[args.algo]()
-    train_data = get_data("data-200-multiple.npz", SEQUENCE_LENGTH, split=slice(0, 20))
+    train_data = get_data(
+        "data-200-10-gravity.npz",
+        SEQUENCE_LENGTH,
+        split=slice(0, 150),
+    )
     train_loader = dataloader(train_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
     test_data = get_data(
-        "data-200-multiple.npz", SEQUENCE_LENGTH, split=slice(20, None)
+        "data-200-10-gravity.npz",
+        SEQUENCE_LENGTH,
+        split=slice(150, None),
     )
-    test_loader = dataloader(test_data, BATCH_SIZE, key=jax.random.PRNGKey(0))
-    run_algo(learner, train_loader, test_loader, 2000)
+    test_loader = dataloader(test_data, 128, key=jax.random.PRNGKey(0))
+    run_algo(learner, train_loader, test_loader, 3000)
 
 
 if __name__ == "__main__":
