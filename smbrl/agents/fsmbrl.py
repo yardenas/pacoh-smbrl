@@ -29,7 +29,7 @@ def update_state(
     observation: jax.Array,
     action: jax.Array,
 ) -> list[jax.Array]:
-    step = lambda o, a, h: model.step(o, a, ssm, h)
+    step = lambda o, a, h: model.step(o, a, False, ssm, h)
     hidden = jax.vmap(step)(observation, action, prev_hidden)[0]
     return hidden
 

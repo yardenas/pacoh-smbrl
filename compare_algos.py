@@ -1,8 +1,6 @@
 import argparse
 import os
 import pickle
-from collections import OrderedDict
-from itertools import cycle
 
 import equinox as eqx
 import jax
@@ -10,36 +8,31 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from omegaconf import OmegaConf
-from optax import l2_loss
 
+from smbrl.agents import maki
 from smbrl.agents import model_learning as ml
 from smbrl.agents.adam import Features, WorldModel, variational_step
 from smbrl.agents.asmbrl import PACOHLearner as PCHLearner
 from smbrl.agents.models import FeedForwardModel, S4Model
-from smbrl.agents import maki
 from smbrl.utils import Learner, PRNGSequence, ensemble_predict
 
 CONTEXTUALIZE = False
 ACTION_SPACE_DIM = 1 + int(CONTEXTUALIZE)
 OBSERVATION_SPACE_DIM = 3
 BATCH_SIZE = 32
+TEST_BATCH_SIZE = 128
 SEQUENCE_LENGTH = 48
 CONTEXT = 5
+EPISODE_CONTEXT = 9
 
 
-SEED = 102
+SEED = 10100
 
 KEY = PRNGSequence(SEED)
 
 
 def split_obs_acs(x):
     return x[..., :OBSERVATION_SPACE_DIM], x[..., OBSERVATION_SPACE_DIM:]
-
-
-def split_context(x, y, context):
-    pre = lambda x: x[:, :, :context]
-    post = lambda x: x[:, :, context:]
-    return tuple(map(pre, (x, y))), tuple(map(post, (x, y)))
 
 
 def flat(prediction):
@@ -68,7 +61,7 @@ class PACOHLearner:
                         n_particles=3,
                         posterior_stddev=0.5,
                         n_prior_samples=5,
-                        prior_weight=1e-3,
+                        prior_weight=1e-1,
                         bandwidth=10.0,
                     ),
                     model_optimizer=dict(lr=1e-3),
@@ -77,7 +70,7 @@ class PACOHLearner:
         )
         self.learner = PCHLearner(model_factory, next(KEY), self.config)
         self.posterior = self.learner.sample_prior(
-            next(KEY), self.config.agent.pacoh.n_prior_samples, BATCH_SIZE
+            next(KEY), self.config.agent.pacoh.n_prior_samples, TEST_BATCH_SIZE
         )
 
     def train_step(self, data):
@@ -144,7 +137,8 @@ class S4Learner:
         return loss
 
     def adapt(self, data):
-        # TODO (yarden): can just use the output y of ssm instead of hidden, and then no need to unroll!
+        # TODO (yarden): can just use the output y of ssm instead of hidden,
+        # and then no need to unroll!
         def unroll_step(o, a):
             def f(carry, x):
                 prev_hidden = carry
@@ -293,6 +287,7 @@ class MakiLearner:
             self.learner,
             self.learner.state,
             next(KEY),
+            1e-5,
             0.01,
         )
         print(rest)
@@ -421,46 +416,39 @@ def make_dir(name):
 
 
 def save_results(path, data, model):
-    np.savez(path, **data)
+    np.savez(path, meas=data)
     with open(f"{path}-model.pkl", "wb") as file:
         pickle.dump(model, file)
 
 
-class LastUpdatedOrderedDict(OrderedDict):
-    def __setitem__(self, key, value):
-        super().__setitem__(key, value)
-        self.move_to_end(key)
-
-
 def run_algo(learner, train_data, test_data, steps):
     result_dir = make_dir(learner.__class__.__name__)
-    results = LastUpdatedOrderedDict()
     maes = []
     for step, batch in zip(range(steps), train_data):
         loss = learner.train_step(batch)
         loss = loss.item()
         print(f"step={step}, loss={loss}")
         if step % 200 == 0:
-            mae = test(learner, iter(test_data), result_dir, results, step)
+            mae = test(learner, iter(test_data), result_dir, step)
             maes.append(mae)
             plt.plot(np.arange(len(maes)), np.asarray(maes))
             plt.tight_layout()
             plt.savefig(
                 str(os.path.join(result_dir, f"loss-{step}.png")), bbox_inches="tight"
             )
-    mae = test(learner, test_data, result_dir, results, step)
+    mae = test(learner, test_data, result_dir, step)
     maes.append(mae)
-    save_results(os.path.join(result_dir, f"results_{SEED}"), results, learner.model)
+    save_results(os.path.join(result_dir, f"results_{SEED}"), maes, learner.model)
 
 
-def test(learner, test_data, result_dir, results, step):
+def test(learner, test_data, result_dir, step):
     maes = []
     for i, data in enumerate(test_data):
         if i > 10:
             break
-        support = tuple(map(lambda x: x[:, :9], data))
-        x, y = map(lambda x: x[:, -1:], data)
+        support = tuple(map(lambda x: x[:, :EPISODE_CONTEXT], data))
         learner.adapt(support)
+        x, y = map(lambda x: x[:, EPISODE_CONTEXT:], data)
         y_hat = learner.predict((x, y))
         mae = np.abs(y_hat - y).mean().item()
         maes.append(mae)
@@ -479,7 +467,7 @@ def test(learner, test_data, result_dir, results, step):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--algo", default="s4", choices=["pacoh", "s4", "vanilla", "rssm", "maki"]
+        "--algo", default="pacoh", choices=["pacoh", "s4", "vanilla", "rssm", "maki"]
     )
     args = parser.parse_args()
     learner = dict(
@@ -500,7 +488,7 @@ def main():
         SEQUENCE_LENGTH,
         split=slice(150, None),
     )
-    test_loader = dataloader(test_data, 128, key=jax.random.PRNGKey(0))
+    test_loader = dataloader(test_data, TEST_BATCH_SIZE, key=jax.random.PRNGKey(0))
     run_algo(learner, train_loader, test_loader, 3000)
 
 

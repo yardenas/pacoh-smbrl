@@ -21,7 +21,8 @@ class Features(NamedTuple):
 
     def flatten(self):
         return jnp.concatenate(
-            [self.observation, self.reward, self.cost, self.terminal, self.done], axis=-1
+            [self.observation, self.reward, self.cost, self.terminal, self.done],
+            axis=-1,
         )
 
 
@@ -150,7 +151,7 @@ class WorldModel(eqx.Module):
             key=context_key,
         )
         self.dynamics = FeedForwardModel(
-            2, state_dim, action_dim + context_size, 128, key=encoder_key
+            3, state_dim, action_dim + context_size, 256, key=encoder_key
         )
 
     def __call__(
