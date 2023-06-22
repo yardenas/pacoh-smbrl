@@ -47,7 +47,7 @@ class Model(Protocol):
         horizon: int,
         initial_state: jax.Array,
         key: jax.random.KeyArray,
-        action_sequence: jax.Array,
+        policy: "Policy",
     ) -> "Prediction":
         ...
 
@@ -70,6 +70,27 @@ class Agent(Protocol):
         ...
 
 
+class Actor(Protocol):
+    def act(
+        self,
+        state: FloatArray,
+        key: Optional[jax.random.KeyArray] = None,
+        deterministic: bool = False,
+    ) -> FloatArray:
+        ...
+
+
+class RolloutFn(Protocol):
+    def __call__(
+        self,
+        horizon: int,
+        initial_state: jax.Array,
+        key: jax.random.KeyArray,
+        policy: "Policy",
+    ) -> "Prediction":
+        ...
+
+
 class Prediction(NamedTuple):
     next_state: jax.Array
     reward: jax.Array
@@ -82,4 +103,4 @@ class Moments(NamedTuple):
     stddev: Optional[jax.Array] = None
 
 
-RolloutFn = Callable[[int, jax.Array, jax.random.KeyArray, jax.Array], Prediction]
+Policy = Union[Callable[[jax.Array], jax.Array], jax.Array]

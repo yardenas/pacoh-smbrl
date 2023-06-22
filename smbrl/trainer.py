@@ -105,6 +105,7 @@ class Trainer:
         )
         if train:
             self.step = step
+            logger.log_metrics(self.step)
         objective, cost_rate, feasibilty = summary.metrics
         logger.log_summary(
             {
@@ -121,7 +122,6 @@ class Trainer:
                 "video",
                 30 / config.training.action_repeat,
             )
-        logger.log_metrics(self.step)
 
     def get_env_random_state(self):
         assert self.env is not None
