@@ -198,7 +198,11 @@ def prepare_features(batch: TrajectoryData) -> maki.Features:
     dones = np.zeros_like(reward)
     dones[:, -1::] = 1.0
     features = maki.Features(
-        batch.observation, reward, batch.cost[..., None], terminals, dones
+        jnp.asarray(batch.observation),
+        jnp.asarray(reward),
+        jnp.asarray(batch.cost[..., None]),
+        jnp.asarray(terminals),
+        jnp.asarray(dones),
     )
     return features
 
