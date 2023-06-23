@@ -13,11 +13,11 @@ from smbrl.utils import Learner
 
 
 class Features(NamedTuple):
-    observation: FloatArray
-    reward: FloatArray
-    cost: FloatArray
-    terminal: FloatArray
-    done: FloatArray
+    observation: FloatArray | jax.Array
+    reward: FloatArray | jax.Array
+    cost: FloatArray | jax.Array
+    terminal: FloatArray | jax.Array
+    done: FloatArray | jax.Array
 
     def flatten(self):
         return jnp.concatenate(
