@@ -14,16 +14,18 @@ from smbrl.types import TaskSampler
 
 class Learner:
     def __init__(
-        self,
-        model: PyTree,
-        optimizer_config: dict[str, Any],
+        self, model: PyTree, optimizer_config: dict[str, Any], batched: bool = False
     ):
         self.optimizer = optax.chain(
             optax.clip_by_global_norm(optimizer_config.get("clip", float("inf"))),
             optax.scale_by_adam(eps=optimizer_config.get("eps", 1e-8)),
             optax.scale(-optimizer_config.get("lr", 1e-3)),
         )
-        self.state = self.optimizer.init(model)
+        if batched:
+            init_fn = eqx.filter_vmap(lambda model: self.optimizer.init(model))
+        else:
+            init_fn = self.optimizer.init
+        self.state = init_fn(eqx.filter(model, eqx.is_array))
 
     def grad_step(
         self, model: PyTree, grads: PyTree, state: optax.OptState
