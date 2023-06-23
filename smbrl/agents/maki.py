@@ -133,7 +133,7 @@ class WorldModel(eqx.Module):
         action_dim: int,
         context_size=32,
         *,
-        key: jax.random.KeyArray
+        key: jax.random.KeyArray,
     ):
         context_key, encoder_key = jax.random.split(key, 2)
         num_layers = 1

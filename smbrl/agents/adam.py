@@ -210,7 +210,7 @@ class SequenceFeatures(eqx.Module):
         )
         self.ff = FeedForward(attention_size, hidden_size, key2)
 
-    def __call__(self, x: jax.Array, mask: jax.Array = None) -> jax.Array:
+    def __call__(self, x: jax.Array, mask: Optional[jax.Array] = None) -> jax.Array:
         skip = x
         causal_mask = jnp.tril(
             jnp.ones((self.encoder.num_heads, x.shape[1], x.shape[1]))
@@ -295,7 +295,7 @@ class WorldModel(eqx.Module):
         hidden_size: int,
         sequence_length: int,
         *,
-        key
+        key,
     ):
         cell_key, context_key, encoder_key, decoder_key = jax.random.split(key, 4)
         context_size = 32
