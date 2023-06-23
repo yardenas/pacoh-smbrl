@@ -1,4 +1,4 @@
-name: smbrl
+name: mmbrl
 replay_buffer:
   batch_size: 32
   sequence_length: 64
@@ -7,6 +7,7 @@ replay_buffer:
 model:
   n_layers: 2
   hidden_size: 128
+  context_size: 64
 actor:
   n_layers: 2
   hidden_size: 128
@@ -29,3 +30,4 @@ discount: 0.99
 lambda_: 0.97
 plan_horizon: 15
 update_steps: 100
+use_context: false
