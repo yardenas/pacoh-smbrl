@@ -25,7 +25,7 @@ class FeedForwardModel(eqx.Module):
         action_dim: int,
         hidden_size: int,
         *,
-        key: jax.Array
+        key: jax.random.KeyArray
     ):
         keys = jax.random.split(key, 2 + n_layers)
         self.layers = [

@@ -1,4 +1,4 @@
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 import distrax as dtx
 import equinox as eqx
@@ -72,7 +72,7 @@ class SequenceFeatures(eqx.Module):
         )
         self.ff = FeedForward(attention_size, hidden_size, key2)
 
-    def __call__(self, x: jax.Array, mask: jax.Array = None) -> jax.Array:
+    def __call__(self, x: jax.Array, mask: Optional[jax.Array] = None) -> jax.Array:
         skip = x
         x = skip + self.mha(x, x, x)
         x = jax.vmap(self.norm)(x)
