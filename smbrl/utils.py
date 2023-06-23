@@ -9,7 +9,7 @@ import optax
 from jaxtyping import PyTree
 
 from smbrl.trajectory import TrajectoryData
-from smbrl.types import TaskSampler
+from smbrl.types import FloatArray, TaskSampler
 
 
 class Learner:
@@ -152,6 +152,17 @@ def fix_task_sampling(sampler: TaskSampler, num_tasks: int) -> TaskSampler:
             yield next(train_tasks_it) if train else next(test_tasks_it)
 
     return sample
+
+
+def contextualize(
+    observation: jax.Array | FloatArray, context: jax.Array | FloatArray
+) -> jax.Array:
+    if observation.ndim > 1 and context.ndim == 1:
+        context = jnp.repeat(context[None], observation.shape[0], 0)
+        observation = jnp.concatenate([observation, context], -1)
+    else:
+        observation = jnp.concatenate([observation, context], -1)
+    return observation
 
 
 class Count:

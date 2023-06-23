@@ -7,7 +7,7 @@ replay_buffer:
 model:
   n_layers: 2
   hidden_size: 128
-  context_size: 0
+  context_size: 64
 actor:
   n_layers: 2
   hidden_size: 128

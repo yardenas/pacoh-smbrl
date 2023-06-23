@@ -97,7 +97,7 @@ class SMBRL(AgentBase):
             self.update_model(batch)
             initial_states = batch.observation.reshape(-1, batch.observation.shape[-1])
             actor_loss, critic_loss = self.actor_critic.update(
-                self.model, initial_states, next(self.prng)
+                prepare_sample(self.model.sample), initial_states, next(self.prng)
             )
             self.logger["agent/actor/loss"] = float(actor_loss.mean())
             self.logger["agent/critic/loss"] = float(critic_loss.mean())
@@ -111,3 +111,8 @@ class SMBRL(AgentBase):
             self.model_learner.state,
         )
         self.logger["agent/model/loss"] = float(loss.mean())
+
+
+def prepare_sample(sample):
+    fn = jax.vmap(sample, (None, 0, None, None))
+    return lambda h, i, k, p: fn(h, i, k, p)

@@ -9,7 +9,7 @@ from optax import OptState, l2_loss
 
 from smbrl.agents.models import FeedForwardModel
 from smbrl.types import FloatArray, Policy, Prediction
-from smbrl.utils import Learner
+from smbrl.utils import Learner, contextualize
 
 
 class Features(NamedTuple):
@@ -160,8 +160,8 @@ class WorldModel(eqx.Module):
         action: jax.Array,
         context: jax.Array,
     ) -> jax.Array:
-        context = jnp.repeat(context[None], state.shape[0], 0)
-        x = jnp.concatenate([state, action, context], -1)
+        state = contextualize(state, context)
+        x = jnp.concatenate([state, action], -1)
         outs = self.dynamics(x)
         return outs.mean
 
@@ -174,12 +174,39 @@ class WorldModel(eqx.Module):
         initial_state: jax.Array,
         key: jax.random.KeyArray,
         policy: Policy,
-        context: Optional[jax.Array] = None,
+        context: jax.Array,
     ) -> Prediction:
-        if isinstance(policy, jax.Array) and context is not None:
-            context = jnp.repeat(context[None], policy.shape[0], 0)
-            policy = jnp.concatenate([policy, context], -1)
-        return self.dynamics.sample(horizon, initial_state, key, policy)
+        def f(carry, x):
+            prev_state = carry
+            if callable_policy:
+                key = x
+                action = policy(jax.lax.stop_gradient(prev_state))
+            else:
+                action, key = x
+            out = self.dynamics.step(
+                prev_state,
+                action,
+            )
+            next_state = contextualize(out.next_state, context)
+            out = Prediction(next_state, out.reward)
+            return next_state, out
+
+        init = contextualize(initial_state, context)
+        callable_policy = False
+        if isinstance(policy, jax.Array):
+            inputs: tuple[jax.Array, jax.random.KeyArray] | jax.random.KeyArray = (
+                policy,
+                jax.random.split(key, policy.shape[0]),
+            )
+        else:
+            callable_policy = True
+            inputs = jax.random.split(key, horizon)
+        _, out = jax.lax.scan(
+            f,
+            init,
+            inputs,
+        )
+        return out  # type: ignore
 
 
 @eqx.filter_jit
@@ -203,6 +230,7 @@ def variational_step(
         extra = dict(
             reconstruction_loss=reconstruction_loss,
             kl_loss=kl_loss,
+            posterior=context_posterior,
         )
         return reconstruction_loss + beta * kl_loss, extra
 
@@ -221,7 +249,7 @@ def infer(
     context = dtx.Normal(*context_posterior).sample(seed=key)
     pred_fn = lambda features, actions: model(features.observation, actions, context)
     outs = eqx.filter_vmap(pred_fn)(features, actions)
-    return outs, context_prior, context_posterior
+    return outs, context_posterior, context_prior
 
 
 def kl_divergence(

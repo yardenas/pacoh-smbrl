@@ -206,7 +206,7 @@ class ASMBRL(AgentBase):
             tasks, *_, dim = batch.observation.shape
             initial_states = batch.observation.reshape(tasks, -1, dim)
             actor_loss, critic_loss = self.actor_critic.update(
-                self.model,
+                prepare_sample(self.model.sample),
                 initial_states,
                 next(self.prng),
             )
@@ -225,6 +225,11 @@ class ASMBRL(AgentBase):
             self.config.agent.replay_buffer.batch_size,
         )
         self.actor_critic = self.actor_critic_factory(next(self.prng))
+
+
+def prepare_sample(sample):
+    fn = jax.vmap(sample, (None, 0, None, None))
+    return lambda h, i, k, p: fn(h, i, k, p)
 
 
 class PACOHLearner:

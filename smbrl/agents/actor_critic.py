@@ -23,7 +23,7 @@ class ContinuousActor(eqx.Module):
         action_dim: int,
         hidden_size: int,
         *,
-        key: jax.random.KeyArray
+        key: jax.random.KeyArray,
     ):
         self.net = eqx.nn.MLP(state_dim, action_dim * 2, hidden_size, n_layers, key=key)
 
@@ -58,7 +58,7 @@ class Critic(eqx.Module):
         state_dim: int,
         hidden_size: int,
         *,
-        key: jax.random.KeyArray
+        key: jax.random.KeyArray,
     ):
         self.net = eqx.nn.MLP(state_dim, 1, hidden_size, n_layers, key=key)
 
@@ -101,7 +101,7 @@ class ModelBasedActorCritic:
                 state_dim=state_dim,
                 action_dim=action_dim,
                 **actor_config,
-                key=actor_key
+                key=actor_key,
             )
             self.critic = Critic(state_dim=state_dim, **critic_config, key=critic_key)
         self.actor_learner = Learner(self.actor, actor_optimizer_config, batched)
@@ -113,7 +113,7 @@ class ModelBasedActorCritic:
 
     def update(
         self,
-        model: types.Model,
+        rollout_fn: types.RolloutFn,
         initial_states: types.FloatArray,
         key: jax.random.KeyArray,
     ):
@@ -121,7 +121,7 @@ class ModelBasedActorCritic:
             actor_critic_fn = taskwise_update_actor_critic
         else:
             actor_critic_fn = update_actor_critic
-        actor_critic_fn = partial(actor_critic_fn, model.sample)
+        actor_critic_fn = partial(actor_critic_fn, rollout_fn)
         results = actor_critic_fn(
             self.horizon,
             initial_states,
@@ -169,7 +169,7 @@ class ActorCriticStepResults(NamedTuple):
 
 @eqx.filter_jit
 def update_actor_critic(
-    rollout_fn: types.RolloutFn,
+    rollout: types.RolloutFn,
     horizon: int,
     initial_states: jax.Array,
     actor: ContinuousActor,
@@ -187,9 +187,7 @@ def update_actor_critic(
     ) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
         traj_key, policy_key = jax.random.split(key, 2)
         policy = lambda state: actor.act(state, key=policy_key)
-        trajectories = jax.vmap(rollout_fn, (None, 0, None, None))(
-            horizon, initial_states, traj_key, policy
-        )
+        trajectories = rollout(horizon, initial_states, traj_key, policy)
         # vmap over batch and time axes.
         bootstrap_values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
         lambda_values = eqx.filter_vmap(compute_lambda_values)(

@@ -1,5 +1,6 @@
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import numpy as np
 from gymnasium import spaces
 from omegaconf import DictConfig
@@ -12,7 +13,7 @@ from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import FloatArray
-from smbrl.utils import Learner, add_to_buffer, normalize
+from smbrl.utils import Learner, add_to_buffer, contextualize, normalize
 
 
 def buffer_factory(
@@ -82,6 +83,9 @@ class MMBRL(AgentBase):
             context_size=config.agent.model.context_size,
             key=next(self.prng),
         )
+        self.context = np.zeros(
+            [config.training.parallel_envs, config.agent.model.context_size]
+        )
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
         self.actor_critic = ModelBasedActorCritic(
             np.prod(observation_space.shape) + config.agent.model.context_size,
@@ -105,6 +109,7 @@ class MMBRL(AgentBase):
             self.obs_normalizer.result.mean,
             self.obs_normalizer.result.std,
         )
+        normalized_obs = contextualize(normalized_obs, self.context)
         action = policy(self.actor_critic.actor, normalized_obs, next(self.prng))
         return np.asarray(action)
 
@@ -125,26 +130,35 @@ class MMBRL(AgentBase):
         self.update()
 
     def adapt(self, trajectory: TrajectoryData) -> None:
+        if self.config.agent.model.context_size == 0:
+            return
         add_to_buffer(
             self.fast_buffer,
             trajectory,
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        if self.config.agent.model.context_size == 0:
-            return
+        features = prepare_features(trajectory)
+        context_update = self.model.infer_context(
+            features, jnp.asarray(trajectory.action)
+        )
+        self.context = (np.asarray(context_update.shift) + self.context) / 2
 
     def update(self) -> None:
         for batch in self.slow_buffer.sample(self.config.agent.update_steps):
-            self.update_model(batch)
-            initial_states = batch.observation.reshape(-1, batch.observation.shape[-1])
+            context_posterior = self.update_model(batch)
+            context_posterior, initial_states = prepare_actor_critic_batch(
+                context_posterior, batch.observation
+            )
             actor_loss, critic_loss = self.actor_critic.update(
-                self.model, initial_states, next(self.prng)
+                contextualize_sample(self.model.sample, context_posterior.shift),
+                initial_states,
+                next(self.prng),
             )
             self.logger["agent/actor/loss"] = float(actor_loss.mean())
             self.logger["agent/critic/loss"] = float(critic_loss.mean())
 
-    def update_model(self, batch: TrajectoryData) -> None:
+    def update_model(self, batch: TrajectoryData) -> maki.ShiftScale:
         features = prepare_features(batch)
         (self.model, self.model_learner.state), (loss, rest) = maki.variational_step(
             features,
@@ -162,20 +176,7 @@ class MMBRL(AgentBase):
             rest["reconstruction_loss"].mean()
         )
         self.logger["agent/model/kl"] = float(rest["kl_loss"].mean())
-
-    def update_actor_critic(self) -> None:
-        for batch in self.fast_buffer.sample(
-            self.config.agent.actor_critic_update_steps
-        ):
-            tasks, *_, dim = batch.observation.shape
-            initial_states = batch.observation.reshape(tasks, -1, dim)
-            actor_loss, critic_loss = self.actor_critic.update(
-                self.model,
-                initial_states,
-                next(self.prng),
-            )
-            self.logger["agent/actor/loss"] = float(actor_loss.mean())
-            self.logger["agent/critic/loss"] = float(critic_loss.mean())
+        return rest["posterior"]
 
     def reset(self):
         self.fast_buffer = buffer_factory("fast", **self.buffer_kwargs)(
@@ -183,6 +184,12 @@ class MMBRL(AgentBase):
             self.config.training.adaptation_budget,
             self.config.agent.replay_buffer.batch_size,
         )
+        self.context = np.ones_like(self.context)
+
+
+def contextualize_sample(sample, context):
+    fn = jax.vmap(sample, (None, 0, None, None, 0))
+    return lambda h, i, k, p: fn(h, i, k, p, context)
 
 
 def prepare_features(batch: TrajectoryData) -> maki.Features:
@@ -194,3 +201,13 @@ def prepare_features(batch: TrajectoryData) -> maki.Features:
         batch.observation, reward, batch.cost[..., None], terminals, dones
     )
     return features
+
+
+def prepare_actor_critic_batch(context, observation):
+    shape = observation.shape[1:3]
+    tile = lambda c: jnp.tile(c[:, None, None], (1, shape[0], shape[1], 1))
+    context_posterior = jax.tree_map(tile, context)
+    flatten = lambda x: x.reshape(-1, x.shape[-1])
+    initial_states = flatten(observation)
+    contexts = jax.tree_map(flatten, context_posterior)
+    return contexts, initial_states
