@@ -243,7 +243,7 @@ class MakiLearner:
 
         def sample_fn(o, a, c):
             # vmap over batches of sequences.
-            sample = lambda o, a: self.model.sample(horizon, o[0], a, c, key)
+            sample = lambda o, a: self.model.sample(horizon, o[0], key, a, c)
             return jax.vmap(sample)(o, a)
 
         pred = jax.vmap(sample_fn)(o, a, self.context)
@@ -400,7 +400,7 @@ def test(learner, test_data, result_dir, step):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--algo", default="pacoh", choices=["pacoh", "vanilla", "rssm", "maki"]
+        "--algo", default="maki", choices=["pacoh", "vanilla", "rssm", "maki"]
     )
     args = parser.parse_args()
     learner = dict(

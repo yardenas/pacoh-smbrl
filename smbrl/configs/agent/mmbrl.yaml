@@ -7,7 +7,7 @@ replay_buffer:
 model:
   n_layers: 2
   hidden_size: 128
-  context_size: 64
+  context_size: 0
 actor:
   n_layers: 2
   hidden_size: 128
@@ -30,4 +30,3 @@ discount: 0.99
 lambda_: 0.97
 plan_horizon: 15
 update_steps: 100
-use_context: false

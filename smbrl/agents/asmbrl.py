@@ -47,6 +47,7 @@ def buffer_factory(
     return make
 
 
+@eqx.filter_jit
 def policy(actor, observation, key):
     return eqx.filter_vmap(lambda actor, o: actor.act(o, key))(actor, observation)
 

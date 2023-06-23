@@ -1,4 +1,5 @@
 import equinox as eqx
+import jax
 import numpy as np
 from gymnasium import spaces
 from omegaconf import DictConfig
@@ -40,8 +41,9 @@ def buffer_factory(
     return make
 
 
+@eqx.filter_jit
 def policy(actor, observation, key):
-    return eqx.filter_vmap(lambda actor, o: actor.act(o, key))(actor, observation)
+    return jax.vmap(lambda o: actor.act(o, key))(observation)
 
 
 class MMBRL(AgentBase):
@@ -74,19 +76,15 @@ class MMBRL(AgentBase):
             config.training.adaptation_budget,
             config.agent.replay_buffer.batch_size,
         )
-
         self.model = maki.WorldModel(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
             context_size=config.agent.model.context_size,
             key=next(self.prng),
         )
-        obs_dim = np.prod(observation_space.shape)
-        if config.agent.use_context:
-            obs_dim += config.agent.model.context_size
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
         self.actor_critic = ModelBasedActorCritic(
-            obs_dim,
+            np.prod(observation_space.shape) + config.agent.model.context_size,
             np.prod(action_space.shape),
             config.agent.actor,
             config.agent.critic,
@@ -133,7 +131,8 @@ class MMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        pass
+        if self.config.agent.model.context_size == 0:
+            return
 
     def update(self) -> None:
         for batch in self.slow_buffer.sample(self.config.agent.update_steps):
@@ -146,12 +145,7 @@ class MMBRL(AgentBase):
             self.logger["agent/critic/loss"] = float(critic_loss.mean())
 
     def update_model(self, batch: TrajectoryData) -> None:
-        terminals = np.zeros_like(batch.reward)
-        dones = np.zeros_like(batch.reward)
-        dones[:, -1::] = 1.0
-        features = maki.Features(
-            batch.observation, batch.reward, batch.cost, terminals, dones
-        )
+        features = prepare_features(batch)
         (self.model, self.model_learner.state), (loss, rest) = maki.variational_step(
             features,
             batch.action,
@@ -189,3 +183,14 @@ class MMBRL(AgentBase):
             self.config.training.adaptation_budget,
             self.config.agent.replay_buffer.batch_size,
         )
+
+
+def prepare_features(batch: TrajectoryData) -> maki.Features:
+    reward = batch.reward[..., None]
+    terminals = np.zeros_like(reward)
+    dones = np.zeros_like(reward)
+    dones[:, -1::] = 1.0
+    features = maki.Features(
+        batch.observation, reward, batch.cost[..., None], terminals, dones
+    )
+    return features

@@ -8,7 +8,7 @@ import jax.numpy as jnp
 from optax import OptState, l2_loss
 
 from smbrl.agents.models import FeedForwardModel
-from smbrl.types import FloatArray, Prediction
+from smbrl.types import FloatArray, Policy, Prediction
 from smbrl.utils import Learner
 
 
@@ -119,7 +119,7 @@ class DomainContext(eqx.Module):
         mu, stddev = jnp.split(x, 2, -1)
         # TODO (yarden): maybe constrain the stddev like here:
         # https://arxiv.org/pdf/1901.05761.pdf to enforce the size of it.
-        stddev = jnn.sigmoid(stddev) * 0.9 + 0.1
+        stddev = jnn.softplus(stddev) + 0.001
         return ShiftScale(mu, stddev)
 
 
@@ -171,14 +171,15 @@ class WorldModel(eqx.Module):
     def sample(
         self,
         horizon: int,
-        state: jax.Array,
-        action_sequence: jax.Array,
-        context: jax.Array,
+        initial_state: jax.Array,
         key: jax.random.KeyArray,
+        policy: Policy,
+        context: Optional[jax.Array] = None,
     ) -> Prediction:
-        context = jnp.repeat(context[None], action_sequence.shape[0], 0)
-        action_sequence = jnp.concatenate([action_sequence, context], -1)
-        return self.dynamics.sample(horizon, state, key, action_sequence)
+        if isinstance(policy, jax.Array) and context is not None:
+            context = jnp.repeat(context[None], policy.shape[0], 0)
+            policy = jnp.concatenate([policy, context], -1)
+        return self.dynamics.sample(horizon, initial_state, key, policy)
 
 
 @eqx.filter_jit
