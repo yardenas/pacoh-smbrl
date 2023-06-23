@@ -13,7 +13,7 @@ from smbrl.agents import maki
 from smbrl.agents import model_learning as ml
 from smbrl.agents.adam import Features, WorldModel, variational_step
 from smbrl.agents.asmbrl import PACOHLearner as PCHLearner
-from smbrl.agents.models import FeedForwardModel, S4Model
+from smbrl.agents.models import FeedForwardModel
 from smbrl.utils import Learner, PRNGSequence, ensemble_predict
 
 CONTEXTUALIZE = False
@@ -109,73 +109,6 @@ class PACOHLearner:
         pred = mean_sample(*split_obs_acs(x))
         y_hat = flat(pred)
         return y_hat
-
-
-class S4Learner:
-    def __init__(self):
-        self.model = S4Model(
-            state_dim=OBSERVATION_SPACE_DIM,
-            action_dim=ACTION_SPACE_DIM,
-            key=next(KEY),
-            sequence_length=SEQUENCE_LENGTH,
-            n_layers=3,
-            hidden_size=256,
-            hippo_n=16,
-        )
-        self.learner = Learner(self.model, dict(lr=1e-3))
-        self.hidden = None
-
-    def train_step(self, data):
-        horizon = data[0].shape[2]
-        x, y = jax.tree_map(lambda x: x.reshape(x.shape[0], -1, *x.shape[3:]), data)
-        terminals = np.zeros_like(x[..., -1:])
-        terminals[:, ::-horizon] = 1.0
-        x = np.concatenate([x, terminals], axis=-1)
-        (self.model, self.learner.state), loss = regression_step(
-            (x, y), self.model, self.learner, self.learner.state
-        )
-        return loss
-
-    def adapt(self, data):
-        # TODO (yarden): can just use the output y of ssm instead of hidden,
-        # and then no need to unroll!
-        def unroll_step(o, a):
-            def f(carry, x):
-                prev_hidden = carry
-                observation, action = x
-                hidden, out = self.model.step(
-                    observation, action, False, ssm, prev_hidden
-                )
-                return hidden, out
-
-            init_hidden = self.model.init_state
-            return jax.lax.scan(f, init_hidden, (o, a))
-
-        ssm = self.model.ssm
-        data = tuple(map(lambda x: x.reshape(x.shape[0], -1, x.shape[-1]), data))
-        o, a = split_obs_acs(data[0])
-        self.hidden, _ = jax.vmap(unroll_step)(o, a)
-
-    def predict(self, data):
-        x, y = tuple(map(lambda x: x.reshape(x.shape[0], -1, x.shape[-1]), data))
-
-        def sample(o, a, h):
-            out = self.model.sample(
-                horizon,
-                o[0],
-                jax.random.PRNGKey(0),
-                a,
-                ssm,
-                h,
-            )
-            return out
-
-        horizon = x.shape[1]
-        ssm = self.model.ssm
-        vmaped_sample = jax.vmap(sample)
-        pred = vmaped_sample(*split_obs_acs(x), self.hidden)
-        y_hat = flat(pred)
-        return y_hat[:, None]
 
 
 class VanillaLearner:
@@ -467,12 +400,11 @@ def test(learner, test_data, result_dir, step):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--algo", default="pacoh", choices=["pacoh", "s4", "vanilla", "rssm", "maki"]
+        "--algo", default="pacoh", choices=["pacoh", "vanilla", "rssm", "maki"]
     )
     args = parser.parse_args()
     learner = dict(
         pacoh=PACOHLearner,
-        s4=S4Learner,
         vanilla=VanillaLearner,
         rssm=RSSMLearner,
         maki=MakiLearner,

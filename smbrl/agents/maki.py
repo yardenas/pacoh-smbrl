@@ -8,16 +8,16 @@ import jax.numpy as jnp
 from optax import OptState, l2_loss
 
 from smbrl.agents.models import FeedForwardModel
-from smbrl.types import Prediction
+from smbrl.types import FloatArray, Prediction
 from smbrl.utils import Learner
 
 
 class Features(NamedTuple):
-    observation: jax.Array
-    reward: jax.Array
-    cost: jax.Array
-    terminal: jax.Array
-    done: jax.Array
+    observation: FloatArray
+    reward: FloatArray
+    cost: FloatArray
+    terminal: FloatArray
+    done: FloatArray
 
     def flatten(self):
         return jnp.concatenate(
