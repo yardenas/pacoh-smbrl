@@ -6,7 +6,6 @@ from hydra import compose, initialize
 
 from smbrl import acting, tasks
 from smbrl.agents.asmbrl import ASMBRL
-from smbrl.agents.fsmbrl import fSMBRL
 from smbrl.agents.smbrl import SMBRL
 from smbrl.trainer import Trainer
 from smbrl.trajectory import TrajectoryData
@@ -15,8 +14,8 @@ from smbrl.utils import ensemble_predict, normalize
 
 @pytest.mark.parametrize(
     "agent",
-    ["asmbrl", "smbrl", "fsmbrl"],
-    ids=["asmbrl", "smbrl", "fsmbrl"],
+    ["asmbrl", "smbrl"],
+    ids=["asmbrl", "smbrl"],
 )
 def test_training(agent):
     with initialize(version_base=None, config_path="../smbrl/configs"):
@@ -74,41 +73,6 @@ def asmbrl_predictions(agent, horizon):
     return mean_step, mean_sample
 
 
-def fsmbrl_predicitions(agent, horizon):
-    ssm = agent.model.ssm
-
-    def unroll_step(o, a):
-        def f(carry, x):
-            prev_hidden = carry
-            observation, action = x
-            hidden, out = agent.model.step(observation, action, ssm, prev_hidden)
-            return hidden, out
-
-        init_hidden = agent.model.init_state
-        return jax.lax.scan(f, init_hidden, (o, a))
-
-    step = jax.vmap(jax.vmap(lambda o, a: unroll_step(o, a)[1]))
-
-    def sample(o, a):
-        context = a.shape[0] - horizon
-        hidden, out_context = unroll_step(o[:context], a[:context])
-        out = agent.model.sample(
-            horizon,
-            o[context],
-            jax.random.PRNGKey(0),
-            a[context:],
-            ssm,
-            hidden,
-        )
-        out = jax.tree_map(
-            lambda x, y: jax.numpy.concatenate([x, y], axis=0), out_context, out
-        )
-        return out
-
-    vmaped_sample = jax.vmap(jax.vmap(sample))
-    return step, vmaped_sample
-
-
 NUM_TASKS = 5
 
 COMMON = [
@@ -128,15 +92,6 @@ ASMBRL_CFG = [
     "agent=asmbrl",
     "agent.update_steps=100",
     "agent.posterior.update_steps=100",
-] + COMMON
-
-FSMBRL_CFG = [
-    "agent=fsmbrl",
-    "agent.update_steps=100",
-    "agent.model.n_layers=4",
-    "agent.model.hidden_size=128",
-    "agent.model.hippo_n=64",
-    "agent.replay_buffer.sequence_length=84",
 ] + COMMON
 
 
@@ -184,9 +139,8 @@ def collect_trajectories(cfg_overrides, agent_class):
     [
         (asmbrl_predictions, ASMBRL_CFG, ASMBRL),
         (smbrl_predictions, SMBRL_CFG, SMBRL),
-        (fsmbrl_predicitions, FSMBRL_CFG, fSMBRL),
     ],
-    ids=["asmbrl", "smbrl", "fsmbrl"],
+    ids=["asmbrl", "smbrl"],
 )
 def test_model_learning(pred_fn_factory, overrides, agent_class):
     trajectories, context, sequence_length, agent = collect_trajectories(
