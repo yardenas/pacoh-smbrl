@@ -31,6 +31,11 @@ class ShiftScale(NamedTuple):
     scale: jax.Array
 
 
+class BeliefAndState(NamedTuple):
+    belief: ShiftScale
+    state: jax.Array
+
+
 class FeedForward(eqx.Module):
     norm: eqx.nn.LayerNorm
     hidden: eqx.nn.Linear
@@ -174,24 +179,24 @@ class WorldModel(eqx.Module):
         initial_state: jax.Array,
         key: jax.random.KeyArray,
         policy: Policy,
-        context: jax.Array,
+        context_belief: ShiftScale,
     ) -> Prediction:
         def f(carry, x):
-            prev_state = carry
+            prev_belief_state = carry
             if callable_policy:
                 key = x
-                action = policy(jax.lax.stop_gradient(prev_state))
+                action = policy(jax.lax.stop_gradient(prev_belief_state))
             else:
                 action, key = x
             out = self.dynamics.step(
-                prev_state,
+                contextualize(prev_belief_state.state, prev_belief_state.belief.shift),
                 action,
             )
-            next_state = contextualize(out.next_state, context)
-            out = Prediction(next_state, out.reward)
-            return next_state, out
+            next_belief_state = BeliefAndState(context_belief, out.next_state)
+            out = Prediction(next_belief_state, out.reward)
+            return next_belief_state, out
 
-        init = contextualize(initial_state, context)
+        init = BeliefAndState(context_belief, initial_state)
         callable_policy = False
         if isinstance(policy, jax.Array):
             inputs: tuple[jax.Array, jax.random.KeyArray] | jax.random.KeyArray = (

@@ -9,9 +9,9 @@ from omegaconf import DictConfig
 import smbrl.agents.model_learning as ml
 from smbrl import metrics as m
 from smbrl.agents import pacoh_nn as pch
-from smbrl.agents.actor_critic import ModelBasedActorCritic
 from smbrl.agents.base import AgentBase
 from smbrl.agents.models import FeedForwardModel
+from smbrl.agents.taskwise_actor_critic import TaskwiseModelBasedActorCritic
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
@@ -123,7 +123,7 @@ class ASMBRL(AgentBase):
             config.agent.posterior.n_prior_samples,
             config.training.task_batch_size,
         )
-        self.actor_critic_factory = lambda key: ModelBasedActorCritic(
+        self.actor_critic_factory = lambda key: TaskwiseModelBasedActorCritic(
             np.prod(observation_space.shape),
             np.prod(action_space.shape),
             config.agent.actor,
@@ -206,7 +206,7 @@ class ASMBRL(AgentBase):
             tasks, *_, dim = batch.observation.shape
             initial_states = batch.observation.reshape(tasks, -1, dim)
             actor_loss, critic_loss = self.actor_critic.update(
-                prepare_sample(self.model.sample),
+                self.model,
                 initial_states,
                 next(self.prng),
             )
@@ -225,11 +225,6 @@ class ASMBRL(AgentBase):
             self.config.agent.replay_buffer.batch_size,
         )
         self.actor_critic = self.actor_critic_factory(next(self.prng))
-
-
-def prepare_sample(sample):
-    fn = jax.vmap(sample, (None, 0, None, None))
-    return lambda h, i, k, p: fn(h, i, k, p)
 
 
 class PACOHLearner:

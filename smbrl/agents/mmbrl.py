@@ -9,6 +9,7 @@ from smbrl import metrics as m
 from smbrl.agents import maki
 from smbrl.agents.actor_critic import ModelBasedActorCritic
 from smbrl.agents.base import AgentBase
+from smbrl.agents.contextual_actor_critic import ContextualModelBasedActorCritic
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
@@ -40,6 +41,35 @@ def buffer_factory(
         num_episodes=budget,
     )
     return make
+
+
+def actor_critic_factory(observation_space, action_space, config, key):
+    if config.agent.model_context_size == 0:
+        return ModelBasedActorCritic(
+            np.prod(observation_space.shape) + config.agent.model.context_size,
+            np.prod(action_space.shape),
+            config.agent.actor,
+            config.agent.critic,
+            config.agent.actor_optimizer,
+            config.agent.critic_optimizer,
+            config.agent.plan_horizon,
+            config.agent.discount,
+            config.agent.lambda_,
+            key,
+        )
+    else:
+        return ContextualModelBasedActorCritic(
+            np.prod(observation_space.shape) + config.agent.model.context_size,
+            np.prod(action_space.shape),
+            config.agent.actor,
+            config.agent.critic,
+            config.agent.actor_optimizer,
+            config.agent.critic_optimizer,
+            config.agent.plan_horizon,
+            config.agent.discount,
+            config.agent.lambda_,
+            key,
+        )
 
 
 @eqx.filter_jit
@@ -87,17 +117,8 @@ class MMBRL(AgentBase):
             [config.training.parallel_envs, config.agent.model.context_size]
         )
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
-        self.actor_critic = ModelBasedActorCritic(
-            np.prod(observation_space.shape) + config.agent.model.context_size,
-            np.prod(action_space.shape),
-            config.agent.actor,
-            config.agent.critic,
-            config.agent.actor_optimizer,
-            config.agent.critic_optimizer,
-            config.agent.plan_horizon,
-            config.agent.discount,
-            config.agent.lambda_,
-            next(self.prng),
+        self.actor_critic = actor_critic_factory(
+            observation_space, action_space, config, next(self.prng)
         )
 
     def __call__(
@@ -151,7 +172,7 @@ class MMBRL(AgentBase):
                 context_posterior, batch.observation
             )
             actor_loss, critic_loss = self.actor_critic.update(
-                contextualize_sample(self.model.sample, context_posterior.shift),
+                self.model,
                 initial_states,
                 next(self.prng),
             )
@@ -185,11 +206,6 @@ class MMBRL(AgentBase):
             self.config.agent.replay_buffer.batch_size,
         )
         self.context = np.ones_like(self.context)
-
-
-def contextualize_sample(sample, context):
-    fn = jax.vmap(sample, (None, 0, None, None, 0))
-    return lambda h, i, k, p: fn(h, i, k, p, context)
 
 
 def prepare_features(batch: TrajectoryData) -> maki.Features:
