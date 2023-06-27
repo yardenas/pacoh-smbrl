@@ -14,7 +14,7 @@ from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import FloatArray
-from smbrl.utils import Learner, add_to_buffer, contextualize, normalize
+from smbrl.utils import Learner, add_to_buffer, normalize
 
 
 def buffer_factory(
@@ -43,10 +43,10 @@ def buffer_factory(
     return make
 
 
-def actor_critic_factory(observation_space, action_space, config, key):
-    if config.agent.model_context_size == 0:
+def actor_critic_factory(observation_space, action_space, config, key, belief):
+    if config.agent.model.context_size == 0:
         return ModelBasedActorCritic(
-            np.prod(observation_space.shape) + config.agent.model.context_size,
+            np.prod(observation_space.shape),
             np.prod(action_space.shape),
             config.agent.actor,
             config.agent.critic,
@@ -59,7 +59,7 @@ def actor_critic_factory(observation_space, action_space, config, key):
         )
     else:
         return ContextualModelBasedActorCritic(
-            np.prod(observation_space.shape) + config.agent.model.context_size,
+            np.prod(observation_space.shape),
             np.prod(action_space.shape),
             config.agent.actor,
             config.agent.critic,
@@ -69,6 +69,7 @@ def actor_critic_factory(observation_space, action_space, config, key):
             config.agent.discount,
             config.agent.lambda_,
             key,
+            belief,
         )
 
 
@@ -113,12 +114,17 @@ class MMBRL(AgentBase):
             context_size=config.agent.model.context_size,
             key=next(self.prng),
         )
-        self.context = np.zeros(
+        belief = jnp.zeros(
             [config.training.parallel_envs, config.agent.model.context_size]
         )
+        self.context_belief = maki.ShiftScale(belief, jnp.ones_like(belief))
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
         self.actor_critic = actor_critic_factory(
-            observation_space, action_space, config, next(self.prng)
+            observation_space,
+            action_space,
+            config,
+            next(self.prng),
+            self.context_belief,
         )
 
     def __call__(
@@ -130,8 +136,11 @@ class MMBRL(AgentBase):
             self.obs_normalizer.result.mean,
             self.obs_normalizer.result.std,
         )
-        normalized_obs = contextualize(normalized_obs, self.context)
-        action = policy(self.actor_critic.actor, normalized_obs, next(self.prng))
+        if self.contextual:
+            state = maki.BeliefAndState(self.context_belief, normalized_obs)
+        else:
+            state = normalized_obs
+        action = policy(self.actor_critic.actor, state, next(self.prng))
         return np.asarray(action)
 
     def observe(self, trajectory: TrajectoryData) -> None:
@@ -159,11 +168,14 @@ class MMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        features = prepare_features(trajectory)
-        context_update = self.model.infer_context(
-            features, jnp.asarray(trajectory.action)
-        )
-        self.context = (np.asarray(context_update.shift) + self.context) / 2
+        # if self.contextual:
+        # features = prepare_features(trajectory)
+        # context_update = self.model.infer_context(
+        #     features, jnp.asarray(trajectory.action)
+        # )
+        # self.context_belief = (
+        #     np.asarray(context_update.shift) + self.context_belief
+        # ) / 2
 
     def update(self) -> None:
         for batch in self.slow_buffer.sample(self.config.agent.update_steps):
@@ -171,6 +183,8 @@ class MMBRL(AgentBase):
             context_posterior, initial_states = prepare_actor_critic_batch(
                 context_posterior, batch.observation
             )
+            if self.contextual:
+                self.actor_critic.contextualize(context_posterior)
             actor_loss, critic_loss = self.actor_critic.update(
                 self.model,
                 initial_states,
@@ -205,7 +219,13 @@ class MMBRL(AgentBase):
             self.config.training.adaptation_budget,
             self.config.agent.replay_buffer.batch_size,
         )
-        self.context = np.ones_like(self.context)
+        self.context_belief = maki.ShiftScale(
+            jnp.zeros_like(self.context_belief), jnp.ones_like(self.context_belief)
+        )
+
+    @property
+    def contextual(self):
+        return self.config.agent.model.context_size > 0
 
 
 def prepare_features(batch: TrajectoryData) -> maki.Features:

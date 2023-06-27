@@ -93,6 +93,7 @@ class ModelBasedActorCritic:
         self.horizon = horizon
         self.discount = discount
         self.lambda_ = lambda_
+        self.update_fn = vanilla_update_actor_critic
 
     def update(
         self,
@@ -100,7 +101,7 @@ class ModelBasedActorCritic:
         initial_states: types.FloatArray,
         key: jax.random.KeyArray,
     ):
-        actor_critic_fn = partial(update_actor_critic, model.sample)
+        actor_critic_fn = partial(self.update_fn, model.sample)
         results = actor_critic_fn(
             self.horizon,
             initial_states,
@@ -166,9 +167,7 @@ def update_actor_critic(
     ) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
         traj_key, policy_key = jax.random.split(key, 2)
         policy = lambda state: actor.act(state, key=policy_key)
-        trajectories = jax.vmap(rollout_fn, (None, 0, None, None))(
-            horizon, initial_states, traj_key, policy
-        )
+        trajectories = rollout_fn(horizon, initial_states, traj_key, policy)
         # vmap over batch and time axes.
         bootstrap_values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
         lambda_values = eqx.filter_vmap(compute_lambda_values)(
@@ -183,8 +182,8 @@ def update_actor_critic(
     )
 
     def critic_loss_fn(critic: Critic) -> jax.Array:
-        values = jax.vmap(jax.vmap(critic))(trajectories.next_state[:, :-1])
-        return l2_loss(values, lambda_values[:, 1:]).mean()
+        values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
+        return l2_loss(values[:, :-1], lambda_values[:, 1:]).mean()
 
     critic_loss, grads = eqx.filter_value_and_grad(critic_loss_fn)(critic)
     new_critic, new_critic_state = critic_learner.grad_step(
@@ -197,4 +196,37 @@ def update_actor_critic(
         new_critic_state,
         actor_loss,
         critic_loss,
+    )
+
+
+@eqx.filter_jit
+def vanilla_update_actor_critic(
+    rollout_fn: types.RolloutFn,
+    horizon: int,
+    initial_states: jax.Array,
+    actor: ContinuousActor,
+    critic: Critic,
+    actor_learning_state: OptState,
+    critic_learning_state: OptState,
+    actor_learner: Learner,
+    critic_learner: Learner,
+    key: jax.random.KeyArray,
+    discount: float,
+    lambda_: float,
+):
+    vmapped_rollout_fn = jax.vmap(rollout_fn, (None, 0, None, None))
+    contextualized_rollout_fn = lambda h, i, k, p: vmapped_rollout_fn(h, i, k, p)
+    return update_actor_critic(
+        contextualized_rollout_fn,
+        horizon,
+        initial_states,
+        actor,
+        critic,
+        actor_learning_state,
+        critic_learning_state,
+        actor_learner,
+        critic_learner,
+        key,
+        discount,
+        lambda_,
     )

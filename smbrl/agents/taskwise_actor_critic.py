@@ -1,4 +1,3 @@
-from functools import partial
 from typing import Any
 
 import equinox as eqx
@@ -57,37 +56,10 @@ class TaskwiseModelBasedActorCritic(ModelBasedActorCritic):
         self.horizon = horizon
         self.discount = discount
         self.lambda_ = lambda_
-        self.task_batch_size = task_batch_size
-
-    def update(
-        self,
-        model: types.Model,
-        initial_states: types.FloatArray,
-        key: jax.random.KeyArray,
-    ):
-        if self.task_batch_size > 1:
-            actor_critic_fn = taskwise_update_actor_critic
+        if task_batch_size > 1:
+            self.update_fn = taskwise_update_actor_critic
         else:
-            actor_critic_fn = update_actor_critic
-        actor_critic_fn = partial(actor_critic_fn, model.sample)
-        results = actor_critic_fn(
-            self.horizon,
-            initial_states,
-            self.actor,
-            self.critic,
-            self.actor_learner.state,
-            self.critic_learner.state,
-            self.actor_learner,
-            self.critic_learner,
-            key,
-            self.discount,
-            self.lambda_,
-        )
-        self.actor = results.new_actor
-        self.critic = results.new_critic
-        self.actor_learner.state = results.new_actor_learning_state
-        self.critic_learner.state = results.new_critic_learning_state
-        return results.actor_loss, results.critic_loss
+            self.update_fn = update_actor_critic
 
 
 def sample_per_task(sample_fn):
@@ -95,6 +67,7 @@ def sample_per_task(sample_fn):
     # 1. Use each member of the ensemble to make predictions.
     # 2. Average over these predictions to (approximately) marginalize
     #    over posterior parameters.
+    sample_fn = jax.vmap(sample_fn, (None, 0, None, None))
     ensemble_sample = lambda sample_fn, h, o, k, pi: ensemble_predict(
         sample_fn, (None, 0, None, None)
     )(
