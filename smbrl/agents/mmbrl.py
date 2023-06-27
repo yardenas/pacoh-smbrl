@@ -160,7 +160,7 @@ class MMBRL(AgentBase):
         self.update()
 
     def adapt(self, trajectory: TrajectoryData) -> None:
-        if self.config.agent.model.context_size == 0:
+        if not self.contextual:
             return
         add_to_buffer(
             self.fast_buffer,
@@ -168,8 +168,7 @@ class MMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        if self.contextual:
-            self.context_belief = infer_context(trajectory, self.model)
+        self.context_belief = infer_context(trajectory, self.model)
 
     def update(self) -> None:
         for batch in self.slow_buffer.sample(self.config.agent.update_steps):
@@ -225,8 +224,9 @@ class MMBRL(AgentBase):
 
 @eqx.filter_jit
 def infer_context(batch: TrajectoryData, model: maki.WorldModel) -> maki.ShiftScale:
+    batch = jax.tree_map(lambda x: x[:, None], batch)
     features = prepare_features(batch)
-    return jax.vmap(model.infer_context)(features, batch.action)
+    return jax.vmap(model.infer_context)(features, jnp.asarray(batch.action))
 
 
 def prepare_features(batch: TrajectoryData) -> maki.Features:
@@ -235,11 +235,11 @@ def prepare_features(batch: TrajectoryData) -> maki.Features:
     dones = jnp.zeros_like(reward)
     dones = dones.at[:, -1::].set(1.0)
     features = maki.Features(
-        batch.observation,
-        reward,
-        batch.cost[..., None],
-        terminals,
-        dones,
+        jnp.asarray(batch.observation),
+        jnp.asarray(reward),
+        jnp.asarray(batch.cost[..., None]),
+        jnp.asarray(terminals),
+        jnp.asarray(dones),
     )
     return features
 
