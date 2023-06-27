@@ -73,6 +73,10 @@ class SequenceFeatures(eqx.Module):
             num_heads,
             attention_size,
             inference=True,
+            use_query_bias=True,
+            use_key_bias=True,
+            use_value_bias=True,
+            use_output_bias=True,
             key=key1,
         )
         self.ff = FeedForward(attention_size, hidden_size, key2)

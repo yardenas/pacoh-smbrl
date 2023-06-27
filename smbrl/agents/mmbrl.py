@@ -1,3 +1,5 @@
+from dataclasses import dataclass, field
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -11,36 +13,10 @@ from smbrl.agents.actor_critic import ModelBasedActorCritic
 from smbrl.agents.base import AgentBase
 from smbrl.agents.contextual_actor_critic import ContextualModelBasedActorCritic
 from smbrl.logging import TrainingLogger
-from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
+from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import FloatArray
 from smbrl.utils import Learner, add_to_buffer, normalize
-
-
-def buffer_factory(
-    buffer_type,
-    observation_shape,
-    action_shape,
-    max_length,
-    seed,
-    precision,
-    sequence_length,
-    num_shots,
-):
-    cls = dict(slow=ReplayBuffer, fast=OnPolicyReplayBuffer)[buffer_type]
-    make = lambda capacity, budget, batch_size: cls(
-        observation_shape=observation_shape,
-        action_shape=action_shape,
-        max_length=max_length,
-        seed=seed,
-        precision=precision,
-        sequence_length=sequence_length,
-        num_shots=num_shots,
-        batch_size=batch_size,
-        capacity=capacity,
-        num_episodes=budget,
-    )
-    return make
 
 
 def actor_critic_factory(observation_space, action_space, config, key, belief):
@@ -88,7 +64,7 @@ class MMBRL(AgentBase):
     ):
         super().__init__(config, logger)
         self.obs_normalizer = m.MetricsAccumulator()
-        self.buffer_kwargs = dict(
+        self.replay_buffer = ReplayBuffer(
             observation_shape=observation_space.shape,
             action_shape=action_space.shape,
             max_length=config.training.time_limit // config.training.action_repeat,
@@ -97,17 +73,11 @@ class MMBRL(AgentBase):
             sequence_length=config.agent.replay_buffer.sequence_length
             // config.training.action_repeat,
             num_shots=config.agent.replay_buffer.num_shots,
+            batch_size=config.agent.replay_buffer.batch_size,
+            capacity=config.agent.replay_buffer.capacity,
+            num_episodes=config.training.episodes_per_task,
         )
-        self.slow_buffer = buffer_factory("slow", **self.buffer_kwargs)(
-            config.agent.replay_buffer.capacity,
-            config.training.episodes_per_task,
-            config.agent.replay_buffer.batch_size,
-        )
-        self.fast_buffer = buffer_factory("fast", **self.buffer_kwargs)(
-            config.training.parallel_envs,
-            config.training.adaptation_budget,
-            config.agent.replay_buffer.batch_size,
-        )
+        self.adaptation_buffer = TrajectoryBuffer()
         self.model = maki.WorldModel(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
@@ -152,7 +122,7 @@ class MMBRL(AgentBase):
             axis=(0, 1),
         )
         add_to_buffer(
-            self.slow_buffer,
+            self.replay_buffer,
             trajectory,
             self.obs_normalizer,
             self.config.training.scale_reward,
@@ -163,15 +133,16 @@ class MMBRL(AgentBase):
         if not self.contextual:
             return
         add_to_buffer(
-            self.fast_buffer,
+            self.adaptation_buffer,
             trajectory,
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        self.context_belief = infer_context(trajectory, self.model)
+        trajectories = self.adaptation_buffer.get()
+        self.context_belief = infer_context(trajectories, self.model)
 
     def update(self) -> None:
-        for batch in self.slow_buffer.sample(self.config.agent.update_steps):
+        for batch in self.replay_buffer.sample(self.config.agent.update_steps):
             context_posterior = self.update_model(batch)
             context_posterior, initial_states = prepare_actor_critic_batch(
                 context_posterior, batch.observation
@@ -207,11 +178,6 @@ class MMBRL(AgentBase):
         return rest["posterior"]
 
     def reset(self):
-        self.fast_buffer = buffer_factory("fast", **self.buffer_kwargs)(
-            self.config.training.parallel_envs,
-            self.config.training.adaptation_budget,
-            self.config.agent.replay_buffer.batch_size,
-        )
         self.context_belief = maki.ShiftScale(
             jnp.zeros_like(self.context_belief.shift),
             jnp.ones_like(self.context_belief.scale),
@@ -224,7 +190,6 @@ class MMBRL(AgentBase):
 
 @eqx.filter_jit
 def infer_context(batch: TrajectoryData, model: maki.WorldModel) -> maki.ShiftScale:
-    batch = jax.tree_map(lambda x: x[:, None], batch)
     features = prepare_features(batch)
     return jax.vmap(model.infer_context)(features, jnp.asarray(batch.action))
 
@@ -252,3 +217,60 @@ def prepare_actor_critic_batch(context, observation):
     initial_states = flatten(observation)
     contexts = jax.tree_map(flatten, context_posterior)
     return contexts, initial_states
+
+
+@dataclass
+class TrajectoryBuffer:
+    data: list[TrajectoryData] = field(default_factory=list)
+
+    def add(self, more_data: TrajectoryData) -> None:
+        self.data.append(more_data)
+
+    def get(self) -> TrajectoryData:
+        # list of tuples -> tuple of lists
+        data = TrajectoryData(*map(lambda x: np.stack(x, 1), zip(*self.data)))
+        return data
+
+    def reset(self) -> None:
+        self.data = []
+
+
+def evaluate_model(model, batch):
+    pass
+
+
+def plot(context, y, y_hat, context_t, savename):
+    import matplotlib.pyplot as plt
+
+    t_test = np.arange(y.shape[2])
+    t_context = np.arange(context.shape[2])
+
+    plt.figure(figsize=(10, 5), dpi=600)
+    for i in range(6):
+        plt.subplot(3, 4, i + 1)
+        plt.plot(t_context, context[i, 0, :, 2], "b.", label="context")
+        plt.plot(
+            t_test,
+            y_hat[i, 0, :, 2],
+            "r",
+            label="prediction",
+            linewidth=1.0,
+        )
+        plt.plot(
+            t_test,
+            y[i, 0, :, 2],
+            "c",
+            label="ground truth",
+            linewidth=1.0,
+        )
+        ax = plt.gca()
+        ax.xaxis.set_ticks_position("bottom")
+        ax.yaxis.set_ticks_position("left")
+        ax.spines["left"].set_position(("data", 0))
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.axvline(context_t, color="k", linestyle="--", linewidth=1.0)
+    plt.tight_layout()
+    plt.savefig(savename, bbox_inches="tight")
+    plt.show(block=False)
+    plt.close()
