@@ -168,14 +168,11 @@ class MMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        # if self.contextual:
-        # features = prepare_features(trajectory)
-        # context_update = self.model.infer_context(
-        #     features, jnp.asarray(trajectory.action)
-        # )
-        # self.context_belief = (
-        #     np.asarray(context_update.shift) + self.context_belief
-        # ) / 2
+        if self.contextual:
+            features = prepare_features(trajectory)
+            self.context_belief = self.model.infer_context(
+                features, jnp.asarray(trajectory.action)
+            )
 
     def update(self) -> None:
         for batch in self.slow_buffer.sample(self.config.agent.update_steps):
