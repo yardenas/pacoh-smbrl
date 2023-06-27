@@ -169,10 +169,7 @@ class MMBRL(AgentBase):
             self.config.training.scale_reward,
         )
         if self.contextual:
-            features = prepare_features(trajectory)
-            self.context_belief = self.model.infer_context(
-                features, jnp.asarray(trajectory.action)
-            )
+            self.context_belief = infer_context(trajectory, self.model)
 
     def update(self) -> None:
         for batch in self.slow_buffer.sample(self.config.agent.update_steps):
@@ -217,7 +214,8 @@ class MMBRL(AgentBase):
             self.config.agent.replay_buffer.batch_size,
         )
         self.context_belief = maki.ShiftScale(
-            jnp.zeros_like(self.context_belief), jnp.ones_like(self.context_belief)
+            jnp.zeros_like(self.context_belief.shift),
+            jnp.ones_like(self.context_belief.scale),
         )
 
     @property
@@ -225,17 +223,23 @@ class MMBRL(AgentBase):
         return self.config.agent.model.context_size > 0
 
 
+@eqx.filter_jit
+def infer_context(batch: TrajectoryData, model: maki.WorldModel) -> maki.ShiftScale:
+    features = prepare_features(batch)
+    return jax.vmap(model.infer_context)(features, batch.action)
+
+
 def prepare_features(batch: TrajectoryData) -> maki.Features:
     reward = batch.reward[..., None]
-    terminals = np.zeros_like(reward)
-    dones = np.zeros_like(reward)
-    dones[:, -1::] = 1.0
+    terminals = jnp.zeros_like(reward)
+    dones = jnp.zeros_like(reward)
+    dones = dones.at[:, -1::].set(1.0)
     features = maki.Features(
-        jnp.asarray(batch.observation),
-        jnp.asarray(reward),
-        jnp.asarray(batch.cost[..., None]),
-        jnp.asarray(terminals),
-        jnp.asarray(dones),
+        batch.observation,
+        reward,
+        batch.cost[..., None],
+        terminals,
+        dones,
     )
     return features
 
