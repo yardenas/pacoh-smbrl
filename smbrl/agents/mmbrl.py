@@ -183,7 +183,7 @@ class MMBRL(AgentBase):
             jnp.zeros_like(self.context_belief.shift),
             jnp.ones_like(self.context_belief.scale),
         )
-        # self.adaptation_buffer.reset()
+        self.adaptation_buffer.reset()
 
     @property
     def contextual(self):
