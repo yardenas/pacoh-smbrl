@@ -168,7 +168,7 @@ class MMBRL(AgentBase):
             self.model_learner,
             self.model_learner.state,
             next(self.prng),
-            0.1,
+            1e-4,
             0.01,
         )
         self.logger["agent/model/loss"] = float(loss.mean())
@@ -183,6 +183,7 @@ class MMBRL(AgentBase):
             jnp.zeros_like(self.context_belief.shift),
             jnp.ones_like(self.context_belief.scale),
         )
+        # self.adaptation_buffer.reset()
 
     @property
     def contextual(self):
@@ -229,7 +230,7 @@ class TrajectoryBuffer:
 
     def get(self) -> TrajectoryData:
         # list of tuples -> tuple of lists
-        data = TrajectoryData(*map(lambda x: np.stack(x, 1), zip(*self.data)))
+        data = TrajectoryData(*map(lambda x: np.stack(x, 1)[:, :3], zip(*self.data)))
         return data
 
     def reset(self) -> None:
@@ -285,6 +286,7 @@ def plot(context, y, y_hat, context_t, savename):
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         ax.axvline(context_t, color="k", linestyle="--", linewidth=1.0)
+    plt.legend()
     plt.tight_layout()
     plt.savefig(savename, bbox_inches="tight")
     plt.show(block=False)
