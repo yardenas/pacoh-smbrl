@@ -15,7 +15,7 @@ from smbrl.agents.contextual_actor_critic import ContextualModelBasedActorCritic
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
-from smbrl.types import FloatArray
+from smbrl.types import FloatArray, Prediction
 from smbrl.utils import Learner, add_to_buffer, normalize
 
 
@@ -140,6 +140,7 @@ class MMBRL(AgentBase):
         )
         trajectories = self.adaptation_buffer.get()
         self.context_belief = infer_context(trajectories, self.model)
+        evaluate_model(self.model, trajectories, self.context_belief)
 
     def update(self) -> None:
         for batch in self.replay_buffer.sample(self.config.agent.update_steps):
@@ -235,8 +236,22 @@ class TrajectoryBuffer:
         self.data = []
 
 
-def evaluate_model(model, batch):
-    pass
+def evaluate_model(model, batch, context):
+    horizon = 15
+    key = jax.random.PRNGKey(10)
+    pred = eqx.filter_vmap(lambda o, a, c: model.sample(horizon, o[0], key, a, c))(
+        batch.observation[:, -1], batch.action[:, -1, :horizon], context
+    )
+    pred = Prediction(pred.next_state.state, pred.reward)
+    pred = jnp.concatenate([pred.next_state, pred.reward[..., None]], axis=-1)
+    plot(
+        batch.observation[:, -1:, :1],
+        batch.next_observation[:, -1:, :horizon],
+        pred[:, None],
+        1,
+        "model.png",
+    )
+    return pred
 
 
 def plot(context, y, y_hat, context_t, savename):
