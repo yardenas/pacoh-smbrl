@@ -81,6 +81,12 @@ class MMBRL(AgentBase):
         self.model = maki.WorldModel(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
+            num_dynamics_layers=config.agent.model.num_dynamics_layers,
+            dynamics_size=config.agent.model.dynamics_size,
+            num_context_layers=config.agent.model.num_context_layers,
+            hidden_size=config.agent.model.hidden_size,
+            intermediate_size=config.agent.model.intermediate_size,
+            num_heads=config.agent.model.num_heads,
             context_size=config.agent.model.context_size,
             key=next(self.prng),
         )
