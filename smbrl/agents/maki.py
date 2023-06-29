@@ -8,16 +8,16 @@ import jax.numpy as jnp
 from optax import OptState, l2_loss
 
 from smbrl.agents.models import FeedForwardModel
-from smbrl.types import FloatArray, Prediction
-from smbrl.utils import Learner
+from smbrl.types import Policy, Prediction
+from smbrl.utils import Learner, contextualize
 
 
 class Features(NamedTuple):
-    observation: FloatArray | jax.Array
-    reward: FloatArray | jax.Array
-    cost: FloatArray | jax.Array
-    terminal: FloatArray | jax.Array
-    done: FloatArray | jax.Array
+    observation: jax.Array
+    reward: jax.Array
+    cost: jax.Array
+    terminal: jax.Array
+    done: jax.Array
 
     def flatten(self):
         return jnp.concatenate(
@@ -29,6 +29,11 @@ class Features(NamedTuple):
 class ShiftScale(NamedTuple):
     shift: jax.Array
     scale: jax.Array
+
+
+class BeliefAndState(NamedTuple):
+    belief: ShiftScale
+    state: jax.Array
 
 
 class FeedForward(eqx.Module):
@@ -68,6 +73,10 @@ class SequenceFeatures(eqx.Module):
             num_heads,
             attention_size,
             inference=True,
+            use_query_bias=True,
+            use_key_bias=True,
+            use_value_bias=True,
+            use_output_bias=True,
             key=key1,
         )
         self.ff = FeedForward(attention_size, hidden_size, key2)
@@ -119,7 +128,7 @@ class DomainContext(eqx.Module):
         mu, stddev = jnp.split(x, 2, -1)
         # TODO (yarden): maybe constrain the stddev like here:
         # https://arxiv.org/pdf/1901.05761.pdf to enforce the size of it.
-        stddev = jnn.sigmoid(stddev) * 0.9 + 0.1
+        stddev = jnn.softplus(stddev) + 0.001
         return ShiftScale(mu, stddev)
 
 
@@ -160,8 +169,8 @@ class WorldModel(eqx.Module):
         action: jax.Array,
         context: jax.Array,
     ) -> jax.Array:
-        context = jnp.repeat(context[None], state.shape[0], 0)
-        x = jnp.concatenate([state, action, context], -1)
+        state = contextualize(state, context)
+        x = jnp.concatenate([state, action], -1)
         outs = self.dynamics(x)
         return outs.mean
 
@@ -171,14 +180,43 @@ class WorldModel(eqx.Module):
     def sample(
         self,
         horizon: int,
-        state: jax.Array,
-        action_sequence: jax.Array,
-        context: jax.Array,
+        initial_state: jax.Array,
         key: jax.random.KeyArray,
+        policy: Policy,
+        context_belief: ShiftScale,
     ) -> Prediction:
-        context = jnp.repeat(context[None], action_sequence.shape[0], 0)
-        action_sequence = jnp.concatenate([action_sequence, context], -1)
-        return self.dynamics.sample(horizon, state, key, action_sequence)
+        def f(carry, x):
+            prev_belief_state = carry
+            if callable_policy:
+                key = x
+                action = policy(jax.lax.stop_gradient(prev_belief_state))
+            else:
+                action, key = x
+            out = self.dynamics.step(
+                contextualize(prev_belief_state.state, prev_belief_state.belief.shift),
+                action,
+            )
+            next_belief_state = BeliefAndState(context_belief, out.next_state)
+            out = Prediction(next_belief_state, out.reward)
+            return next_belief_state, out
+
+        init = BeliefAndState(context_belief, initial_state)
+        callable_policy = False
+        if isinstance(policy, jax.Array):
+            inputs: tuple[jax.Array, jax.random.KeyArray] | jax.random.KeyArray = (
+                policy,
+                jax.random.split(key, policy.shape[0]),
+            )
+            assert policy.shape[0] <= horizon
+        else:
+            callable_policy = True
+            inputs = jax.random.split(key, horizon)
+        _, out = jax.lax.scan(
+            f,
+            init,
+            inputs,
+        )
+        return out  # type: ignore
 
 
 @eqx.filter_jit
@@ -202,6 +240,7 @@ def variational_step(
         extra = dict(
             reconstruction_loss=reconstruction_loss,
             kl_loss=kl_loss,
+            posterior=context_posterior,
         )
         return reconstruction_loss + beta * kl_loss, extra
 
@@ -220,7 +259,7 @@ def infer(
     context = dtx.Normal(*context_posterior).sample(seed=key)
     pred_fn = lambda features, actions: model(features.observation, actions, context)
     outs = eqx.filter_vmap(pred_fn)(features, actions)
-    return outs, context_prior, context_posterior
+    return outs, context_posterior, context_prior
 
 
 def kl_divergence(

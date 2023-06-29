@@ -1,3 +1,4 @@
 pendulum:
   vary: gravity_direction
   limits: [-3.1416, 3.1416]
+  expose_params: true

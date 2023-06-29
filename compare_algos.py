@@ -14,6 +14,7 @@ from smbrl.agents import model_learning as ml
 from smbrl.agents.adam import Features, WorldModel, variational_step
 from smbrl.agents.asmbrl import PACOHLearner as PCHLearner
 from smbrl.agents.models import FeedForwardModel
+from smbrl.types import Prediction
 from smbrl.utils import Learner, PRNGSequence, ensemble_predict
 
 CONTEXTUALIZE = False
@@ -23,10 +24,10 @@ BATCH_SIZE = 32
 TEST_BATCH_SIZE = 128
 SEQUENCE_LENGTH = 48
 CONTEXT = 5
-EPISODE_CONTEXT = 9
+EPISODE_CONTEXT = 1
 
 
-SEED = 10100
+SEED = 0
 
 KEY = PRNGSequence(SEED)
 
@@ -223,7 +224,7 @@ class MakiLearner:
             1e-5,
             0.01,
         )
-        print(rest)
+        print(rest["reconstruction_loss"], rest["kl_loss"])
         return loss
 
     def adapt(self, data):
@@ -232,7 +233,7 @@ class MakiLearner:
         dones = np.zeros_like(r)
         dones[:, -1::] = 1.0
         features = maki.Features(o, r, jnp.zeros_like(r), jnp.zeros_like(r), dones)
-        context = jax.vmap(self.model.infer_context)(features, a).shift
+        context = jax.vmap(self.model.infer_context)(features, a)
         self.context = context
 
     def predict(self, data):
@@ -243,10 +244,11 @@ class MakiLearner:
 
         def sample_fn(o, a, c):
             # vmap over batches of sequences.
-            sample = lambda o, a: self.model.sample(horizon, o[0], a, c, key)
+            sample = lambda o, a: self.model.sample(horizon, o[0], key, a, c)
             return jax.vmap(sample)(o, a)
 
         pred = jax.vmap(sample_fn)(o, a, self.context)
+        pred = Prediction(pred.next_state.state, pred.reward)
         y_hat = flat(pred)
         return y_hat
 
@@ -400,7 +402,7 @@ def test(learner, test_data, result_dir, step):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--algo", default="pacoh", choices=["pacoh", "vanilla", "rssm", "maki"]
+        "--algo", default="maki", choices=["pacoh", "vanilla", "rssm", "maki"]
     )
     args = parser.parse_args()
     learner = dict(

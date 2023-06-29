@@ -9,9 +9,9 @@ from omegaconf import DictConfig
 import smbrl.agents.model_learning as ml
 from smbrl import metrics as m
 from smbrl.agents import pacoh_nn as pch
-from smbrl.agents.actor_critic import ModelBasedActorCritic
 from smbrl.agents.base import AgentBase
 from smbrl.agents.models import FeedForwardModel
+from smbrl.agents.taskwise_actor_critic import TaskwiseModelBasedActorCritic
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import OnPolicyReplayBuffer, ReplayBuffer
 from smbrl.trajectory import TrajectoryData
@@ -47,6 +47,7 @@ def buffer_factory(
     return make
 
 
+@eqx.filter_jit
 def policy(actor, observation, key):
     return eqx.filter_vmap(lambda actor, o: actor.act(o, key))(actor, observation)
 
@@ -122,7 +123,7 @@ class ASMBRL(AgentBase):
             config.agent.posterior.n_prior_samples,
             config.training.task_batch_size,
         )
-        self.actor_critic_factory = lambda key: ModelBasedActorCritic(
+        self.actor_critic_factory = lambda key: TaskwiseModelBasedActorCritic(
             np.prod(observation_space.shape),
             np.prod(action_space.shape),
             config.agent.actor,

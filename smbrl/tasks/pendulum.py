@@ -5,7 +5,7 @@ from typing import Callable, Iterable, NamedTuple, Optional, no_type_check
 import numpy as np
 import numpy.typing as npt
 from gymnasium import Env
-from gymnasium.core import Wrapper
+from gymnasium.core import ObservationWrapper, Wrapper
 from gymnasium.envs.classic_control.pendulum import angle_normalize
 from gymnasium.spaces import Box
 from omegaconf import DictConfig
@@ -214,6 +214,18 @@ class GravityPendulum(Wrapper[Box, Box]):
             )
 
 
+class ExposeParams(ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        low = np.concatenate([self.observation_space.low, [-np.pi]])
+        high = np.concatenate([self.observation_space.high, [np.pi]])
+        self._observation_space = Box(low, high, dtype=np.float32)
+
+    def observation(self, observation):
+        theta_0 = self.env.theta_0
+        return np.concatenate([observation, np.array([theta_0])])
+
+
 def make_env_factory(cfg: DictConfig) -> Callable[[], Env[Box, Box]]:
     def env() -> Env[Box, Box]:
         import gymnasium
@@ -223,6 +235,8 @@ def make_env_factory(cfg: DictConfig) -> Callable[[], Env[Box, Box]]:
         env = gymnasium.make("Pendulum-v1", render_mode="rgb_array")
         env._max_episode_steps = cfg.training.time_limit  # type: ignore
         env = GravityPendulum(env)
+        if cfg.environment.pendulum.expose_params:
+            env = ExposeParams(env)
         match cfg.environment.pendulum.vary:
             case "gravity_direction":
                 alter_fn = alter_gravity_direction

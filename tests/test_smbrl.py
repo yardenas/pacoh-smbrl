@@ -14,8 +14,8 @@ from smbrl.utils import ensemble_predict, normalize
 
 @pytest.mark.parametrize(
     "agent",
-    ["asmbrl", "smbrl"],
-    ids=["asmbrl", "smbrl"],
+    ["asmbrl", "smbrl", "mmbrl"],
+    ids=["asmbrl", "smbrl", "mmbrl"],
 )
 def test_training(agent):
     with initialize(version_base=None, config_path="../smbrl/configs"):

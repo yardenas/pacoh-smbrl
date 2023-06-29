@@ -435,7 +435,7 @@ def infer(
     infer_fn = lambda features, actions: model(features, actions, context, infer_key)
     outs = eqx.filter_vmap(infer_fn)(features, actions)
     _, outs, priors, posteriors = outs
-    return outs, context_prior, context_posterior, priors, posteriors
+    return outs, context_posterior, context_prior, posteriors, priors
 
 
 def kl_divergence(
