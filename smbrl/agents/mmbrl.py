@@ -261,7 +261,7 @@ def plot(context, y, y_hat, context_t, savename):
     t_context = np.arange(context.shape[2])
 
     plt.figure(figsize=(10, 5), dpi=600)
-    for i in range(6):
+    for i in range(min(6, context.shape[0])):
         plt.subplot(3, 4, i + 1)
         plt.plot(t_context, context[i, 0, :, 2], "b.", label="context")
         plt.plot(

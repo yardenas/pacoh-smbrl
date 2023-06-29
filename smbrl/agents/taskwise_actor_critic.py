@@ -67,7 +67,6 @@ def sample_per_task(sample_fn):
     # 1. Use each member of the ensemble to make predictions.
     # 2. Average over these predictions to (approximately) marginalize
     #    over posterior parameters.
-    sample_fn = jax.vmap(sample_fn, (None, 0, None, None))
     ensemble_sample = lambda sample_fn, h, o, k, pi: ensemble_predict(
         sample_fn, (None, 0, None, None)
     )(
@@ -76,9 +75,11 @@ def sample_per_task(sample_fn):
         k,
         pi,
     )
-    return lambda h, o, k, pi: jax.tree_map(
+    marginalize_sample = lambda h, o, k, pi: jax.tree_map(
         lambda x: x.squeeze(1).mean(0), ensemble_sample(sample_fn, h, o, k, pi)
     )
+    vmapped_sample = jax.vmap(marginalize_sample, (None, 0, None, None))
+    return vmapped_sample
 
 
 @eqx.filter_jit

@@ -207,7 +207,7 @@ class WorldModel(eqx.Module):
                 policy,
                 jax.random.split(key, policy.shape[0]),
             )
-            assert policy.shape[0] == horizon
+            assert policy.shape[0] <= horizon
         else:
             callable_policy = True
             inputs = jax.random.split(key, horizon)
