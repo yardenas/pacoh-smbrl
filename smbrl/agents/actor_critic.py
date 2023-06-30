@@ -138,6 +138,34 @@ def compute_lambda_values(
     return discounted_cumsum(tds, lambda_ * discount)
 
 
+def actor_loss_fn(
+    actor: ContinuousActor,
+    critic: Critic,
+    rollout_fn: types.RolloutFn,
+    horizon: int,
+    initial_states: jax.Array,
+    key: jax.random.KeyArray,
+    discount: float,
+    lambda_: float,
+) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
+    traj_key, policy_key = jax.random.split(key, 2)
+    policy = lambda state: actor.act(state, key=policy_key)
+    trajectories = rollout_fn(horizon, initial_states, traj_key, policy)
+    # vmap over batch and time axes.
+    bootstrap_values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
+    lambda_values = eqx.filter_vmap(compute_lambda_values)(
+        bootstrap_values, trajectories.reward, discount, lambda_
+    )
+    return -lambda_values.mean(), (trajectories, lambda_values)
+
+
+def critic_loss_fn(
+    critic: Critic, trajectories: types.Prediction, lambda_values: jax.Array
+) -> jax.Array:
+    values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
+    return l2_loss(values[:, :-1], lambda_values[:, 1:]).mean()
+
+
 class ActorCriticStepResults(NamedTuple):
     new_actor: ContinuousActor
     new_critic: Critic
@@ -162,30 +190,16 @@ def update_actor_critic(
     discount: float,
     lambda_: float,
 ) -> ActorCriticStepResults:
-    def actor_loss_fn(
-        actor: ContinuousActor,
-    ) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
-        traj_key, policy_key = jax.random.split(key, 2)
-        policy = lambda state: actor.act(state, key=policy_key)
-        trajectories = rollout_fn(horizon, initial_states, traj_key, policy)
-        # vmap over batch and time axes.
-        bootstrap_values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
-        lambda_values = eqx.filter_vmap(compute_lambda_values)(
-            bootstrap_values, trajectories.reward, discount, lambda_
-        )
-        return -lambda_values.mean(), (trajectories, lambda_values)
-
-    rest, grads = eqx.filter_value_and_grad(actor_loss_fn, has_aux=True)(actor)
+    rest, grads = eqx.filter_value_and_grad(actor_loss_fn, has_aux=True)(
+        actor, critic, rollout_fn, horizon, initial_states, key, discount, lambda_
+    )
     actor_loss, (trajectories, lambda_values) = rest
     new_actor, new_actor_state = actor_learner.grad_step(
         actor, grads, actor_learning_state
     )
-
-    def critic_loss_fn(critic: Critic) -> jax.Array:
-        values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
-        return l2_loss(values[:, :-1], lambda_values[:, 1:]).mean()
-
-    critic_loss, grads = eqx.filter_value_and_grad(critic_loss_fn)(critic)
+    critic_loss, grads = eqx.filter_value_and_grad(critic_loss_fn)(
+        critic, trajectories, lambda_values
+    )
     new_critic, new_critic_state = critic_learner.grad_step(
         critic, grads, critic_learning_state
     )
