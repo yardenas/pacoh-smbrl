@@ -30,7 +30,6 @@ def test_training(agent):
                 "training.eval_every=1",
                 "training.action_repeat=4",
                 f"agent={agent}",
-                "agent.model.n_layers=1",
                 "agent.model.hidden_size=32",
                 "agent.update_steps=1",
                 "agent.replay_buffer.sequence_length=16",
