@@ -34,3 +34,5 @@ discount: 0.99
 lambda_: 0.97
 plan_horizon: 15
 update_steps: 100
+kl_scale: 1e-4
+free_nats: 0.01

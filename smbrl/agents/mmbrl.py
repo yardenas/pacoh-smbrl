@@ -174,8 +174,8 @@ class MMBRL(AgentBase):
             self.model_learner,
             self.model_learner.state,
             next(self.prng),
-            1e-4,
-            0.01,
+            self.config.agent.kl_scale,
+            self.config.agent.free_nats,
         )
         self.logger["agent/model/loss"] = float(loss.mean())
         self.logger["agent/model/reconstruction"] = float(
