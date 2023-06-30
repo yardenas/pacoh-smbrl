@@ -5,8 +5,12 @@ replay_buffer:
   num_shots: 4
   capacity: 1000
 model:
-  n_layers: 2
+  num_dynamics_layers: 3
+  dynamics_size: 128
+  num_context_layers: 2
   hidden_size: 128
+  intermediate_size: 512
+  num_heads: 2
   context_size: 64
 actor:
   n_layers: 2
@@ -30,3 +34,5 @@ discount: 0.99
 lambda_: 0.97
 plan_horizon: 15
 update_steps: 100
+kl_scale: 1e-4
+free_nats: 0.01

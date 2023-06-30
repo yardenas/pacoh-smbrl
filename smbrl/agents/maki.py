@@ -36,71 +36,108 @@ class BeliefAndState(NamedTuple):
     state: jax.Array
 
 
-class FeedForward(eqx.Module):
+class FeedForwardBlock(eqx.Module):
     norm: eqx.nn.LayerNorm
     hidden: eqx.nn.Linear
     out: eqx.nn.Linear
 
-    def __init__(self, attention_size: int, hidden_size: int, key: jax.random.KeyArray):
+    def __init__(
+        self, hidden_size: int, intermediate_size: int, key: jax.random.KeyArray
+    ):
         key1, key2 = jax.random.split(key)
-        self.norm = eqx.nn.LayerNorm(attention_size)
-        self.hidden = eqx.nn.Linear(attention_size, hidden_size, key=key1)
-        self.out = eqx.nn.Linear(hidden_size, attention_size, key=key2)
+        self.norm = eqx.nn.LayerNorm(hidden_size)
+        self.hidden = eqx.nn.Linear(hidden_size, intermediate_size, key=key1)
+        self.out = eqx.nn.Linear(intermediate_size, hidden_size, key=key2)
 
     def __call__(self, x: jax.Array) -> jax.Array:
         skip = x
-        x = jnn.relu(self.hidden(x))
+        x = jnn.gelu(self.hidden(x))
         x = skip + self.out(x)
         x = self.norm(x)
         return x
 
 
-class SequenceFeatures(eqx.Module):
+class AttentionBlock(eqx.Module):
     norm: eqx.nn.LayerNorm
     mha: eqx.nn.MultiheadAttention
-    ff: FeedForward
 
-    def __init__(
-        self,
-        num_heads: int,
-        attention_size: int,
-        hidden_size: int,
-        key: jax.random.KeyArray,
-    ):
-        key1, key2 = jax.random.split(key)
-        self.norm = eqx.nn.LayerNorm(attention_size)
+    def __init__(self, hidden_size: int, num_heads: int, key: jax.random.KeyArray):
         self.mha = eqx.nn.MultiheadAttention(
-            num_heads,
-            attention_size,
-            inference=True,
+            num_heads=num_heads,
+            query_size=hidden_size,
             use_query_bias=True,
             use_key_bias=True,
             use_value_bias=True,
             use_output_bias=True,
-            key=key1,
+            inference=True,
+            key=key,
         )
-        self.ff = FeedForward(attention_size, hidden_size, key2)
+        self.norm = eqx.nn.LayerNorm(shape=hidden_size)
 
-    def __call__(self, x: jax.Array, mask: Optional[jax.Array] = None) -> jax.Array:
-        skip = x
-        x = skip + self.mha(x, x, x)
-        x = jax.vmap(self.norm)(x)
-        x = jax.vmap(self.ff)(x)
-        return x
+    def __call__(
+        self, inputs: jax.Array, mask: Optional[jax.Array] = None
+    ) -> jax.Array:
+        if mask is not None:
+            mask = self.make_self_attention_mask(mask)
+        attention_output = self.mha(
+            query=inputs,
+            key_=inputs,
+            value=inputs,
+            mask=mask,
+            inference=True,
+        )
+        result = attention_output
+        result = result + inputs
+        result = jax.vmap(self.norm)(result)
+        return result
+
+    def make_self_attention_mask(self, mask: jax.Array) -> jax.Array:
+        """Create self-attention mask from sequence-level mask."""
+        mask = jnp.multiply(
+            jnp.expand_dims(mask, axis=-1), jnp.expand_dims(mask, axis=-2)
+        )
+        mask = jnp.expand_dims(mask, axis=-3)
+        mask = jnp.repeat(mask, repeats=self.num_heads, axis=-3)
+        return mask.astype(jnp.float32)
+
+
+class TransformerLayer(eqx.Module):
+    attention: AttentionBlock
+    ff: FeedForwardBlock
+
+    def __init__(
+        self,
+        hidden_size: int,
+        intermediate_size: int,
+        num_heads: int,
+        key: jax.random.KeyArray,
+    ):
+        key1, key2 = jax.random.split(key)
+        self.attention = AttentionBlock(hidden_size, num_heads, key1)
+        self.ff = FeedForwardBlock(hidden_size, intermediate_size, key2)
+
+    def __call__(
+        self,
+        inputs: jax.Array,
+        mask: Optional[jax.Array] = None,
+    ) -> jax.Array:
+        attention_output = self.attention(inputs, mask)
+        output = jax.vmap(self.ff)(attention_output)
+        return output
 
 
 class DomainContext(eqx.Module):
     encoder: eqx.nn.Linear
-    sequence_features: list[SequenceFeatures]
+    sequence_features: list[TransformerLayer]
     decoder: eqx.nn.Linear
 
     def __init__(
         self,
         num_layers: int,
-        num_heads: int,
         input_size: int,
-        attention_size: int,
         hidden_size: int,
+        intermediate_size: int,
+        num_heads: int,
         context_size: int,
         key: jax.random.KeyArray,
     ):
@@ -109,12 +146,12 @@ class DomainContext(eqx.Module):
             *sequence_keys,
             decoder_key,
         ) = jax.random.split(key, 2 + num_layers)
-        self.encoder = eqx.nn.Linear(input_size, attention_size, key=encoder_key)
+        self.encoder = eqx.nn.Linear(input_size, hidden_size, key=encoder_key)
         self.sequence_features = [
-            SequenceFeatures(num_heads, attention_size, hidden_size, key)
+            TransformerLayer(hidden_size, intermediate_size, num_heads, key)
             for key in sequence_keys
         ]
-        self.decoder = eqx.nn.Linear(attention_size, context_size * 2, key=decoder_key)
+        self.decoder = eqx.nn.Linear(hidden_size, context_size * 2, key=decoder_key)
 
     def __call__(self, features: Features, actions: jax.Array) -> ShiftScale:
         x = jnp.concatenate([features.flatten(), actions], -1)
@@ -140,27 +177,33 @@ class WorldModel(eqx.Module):
         self,
         state_dim: int,
         action_dim: int,
-        context_size=32,
+        num_dynamics_layers: int,
+        dynamics_size: int,
+        num_context_layers: int,
+        hidden_size: int,
+        intermediate_size: int,
+        num_heads: int,
+        context_size: int,
         *,
         key: jax.random.KeyArray,
     ):
         context_key, encoder_key = jax.random.split(key, 2)
-        num_layers = 1
-        num_heads = 8
         aux_dim = 4  # terminal, done, cost, reward
-        attention_size = 256
-        hidden_size = 256
         self.context = DomainContext(
-            num_layers,
-            num_heads,
+            num_context_layers,
             state_dim + aux_dim + action_dim,
-            attention_size,
             hidden_size,
+            intermediate_size,
+            num_heads,
             context_size,
             key=context_key,
         )
         self.dynamics = FeedForwardModel(
-            3, state_dim, action_dim + context_size, 256, key=encoder_key
+            num_dynamics_layers,
+            state_dim,
+            action_dim + context_size,
+            dynamics_size,
+            key=encoder_key,
         )
 
     def __call__(
