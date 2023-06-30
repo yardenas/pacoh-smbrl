@@ -205,13 +205,13 @@ class ASMBRL(AgentBase):
         ):
             tasks, *_, dim = batch.observation.shape
             initial_states = batch.observation.reshape(tasks, -1, dim)
-            actor_loss, critic_loss = self.actor_critic.update(
+            outs = self.actor_critic.update(
                 self.model,
                 initial_states,
                 next(self.prng),
             )
-            self.logger["agent/actor/loss"] = float(actor_loss.mean())
-            self.logger["agent/critic/loss"] = float(critic_loss.mean())
+            for k, v in outs.items():
+                self.logger[k] = v
 
     def reset(self):
         self.model = self.pacoh_learner.sample_prior(

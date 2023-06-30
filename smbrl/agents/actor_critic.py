@@ -100,7 +100,7 @@ class ModelBasedActorCritic:
         model: types.Model,
         initial_states: types.FloatArray,
         key: jax.random.KeyArray,
-    ):
+    ) -> dict[str, float]:
         actor_critic_fn = partial(self.update_fn, model.sample)
         results = actor_critic_fn(
             self.horizon,
@@ -119,7 +119,10 @@ class ModelBasedActorCritic:
         self.critic = results.new_critic
         self.actor_learner.state = results.new_actor_learning_state
         self.critic_learner.state = results.new_critic_learning_state
-        return results.actor_loss, results.critic_loss
+        return {
+            "agent/actor/loss": results.actor_loss.item(),
+            "agent/critic/loss": results.critic_loss.item(),
+        }
 
 
 def discounted_cumsum(x: jax.Array, discount: float) -> jax.Array:

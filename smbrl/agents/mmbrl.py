@@ -156,13 +156,13 @@ class MMBRL(AgentBase):
             )
             if self.contextual:
                 self.actor_critic.contextualize(context_posterior)
-            actor_loss, critic_loss = self.actor_critic.update(
+            outs = self.actor_critic.update(
                 self.model,
                 initial_states,
                 next(self.prng),
             )
-            self.logger["agent/actor/loss"] = float(actor_loss.mean())
-            self.logger["agent/critic/loss"] = float(critic_loss.mean())
+            for k, v in outs.items():
+                self.logger[k] = v
 
     def update_model(self, batch: TrajectoryData) -> maki.ShiftScale:
         features = prepare_features(batch)
