@@ -42,7 +42,11 @@ class ContinuousActor(eqx.Module):
         deterministic: bool = False,
     ) -> jax.Array:
         if deterministic:
-            return self(state).mean()
+            samples, log_probs = self(state).sample_and_log_prob(
+                seed=jax.random.PRNGKey(0), sample_shape=100
+            )
+            most_likely = jnp.argmax(log_probs)
+            return samples[most_likely]
         else:
             assert key is not None
             return self(state).sample(seed=key)
@@ -232,9 +236,8 @@ def vanilla_update_actor_critic(
     lambda_: float,
 ):
     vmapped_rollout_fn = jax.vmap(rollout_fn, (None, 0, None, None))
-    contextualized_rollout_fn = lambda h, i, k, p: vmapped_rollout_fn(h, i, k, p)
     return update_actor_critic(
-        contextualized_rollout_fn,
+        vmapped_rollout_fn,
         horizon,
         initial_states,
         actor,

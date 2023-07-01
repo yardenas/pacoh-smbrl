@@ -90,7 +90,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             self.safety_discount,
             self.lambda_,
             self.safety_budget,
-            self.actor_learner.state.eta,
+            self.actor_learner.state[0].eta,
             self.backup_lr,
         )
         self.actor = results.new_actor
@@ -168,6 +168,15 @@ def actor_loss_fn(
     )
 
 
+def jacrev(f, has_aux=False):
+    def jacfn(x):
+        y, vjp_fn, aux = eqx.filter_vjp(f, x, has_aux=has_aux)
+        (J,) = eqx.filter_vmap(vjp_fn, in_axes=0)(jnp.eye(len(y)))
+        return J, aux
+
+    return jacfn
+
+
 @eqx.filter_jit
 def safe_update_actor_critic(
     rollout_fn: types.RolloutFn,
@@ -190,13 +199,14 @@ def safe_update_actor_critic(
     eta: float,
     backup_lr: float,
 ):
+    vmapped_rollout_fn = jax.vmap(rollout_fn, (None, 0, None, None))
     # Take gradients with respect to the loss function and the constraint in one go.
-    jacobian, rest = jax.jacrev(
+    jacobian, rest = jacrev(
         lambda actor: actor_loss_fn(
             actor,
             critic,
             safety_critic,
-            rollout_fn,
+            vmapped_rollout_fn,
             horizon,
             initial_states,
             key,

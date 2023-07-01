@@ -10,6 +10,7 @@ STATE_DIM = 2
 ACTION_DIM = 1
 DT = 0.01
 TIME_HORIZON = 50
+BATCH_SIZE = 16
 
 
 def rollout(
@@ -52,7 +53,7 @@ class DummmyModel(types.Model):
 def step(state, action):
     pos, vel = state
     pos = pos + vel * DT
-    vel = action
+    vel = action[0]
     new_state = jnp.stack([pos, vel])
     delta = pos - 0.25
     reward = delta + (delta < 0.025).astype(jnp.float32)
@@ -61,19 +62,17 @@ def step(state, action):
 
 
 def evaluate(policy):
-    trajectory = rollout(
-        TIME_HORIZON, jnp.zeros(STATE_DIM), jax.random.PRNGKey(0), policy
-    )
-    objective = trajectory.reward.sum()
-    constraint = trajectory.cost.sum()
+    trajectories = jax.vmap(
+        lambda s: rollout(TIME_HORIZON, s, jax.random.PRNGKey(0), policy)
+    )(jnp.zeros((BATCH_SIZE, STATE_DIM)))
+    objective = trajectories.reward.mean(0).sum()
+    constraint = trajectories.cost.mean(0).sum()
     return objective, constraint
 
 
 @pytest.fixture
 def safe_actor_critic():
-    state_dim = 1
-    action_dim = 1
-    actor_config = {"n_layers": 1, "hidden_size": 32}
+    actor_config = {"n_layers": 3, "hidden_size": 32}
     critic_config = actor_config.copy()
     actor_optimizer_config = {"lr": 3e-4, "eps": 1e-5, "clip": 0.5}
     critic_optimizer_config = actor_config.copy()
@@ -89,8 +88,8 @@ def safe_actor_critic():
     base_lr = 3e-4
     key = jax.random.PRNGKey(0)
     return SafeModelBasedActorCritic(
-        state_dim=state_dim,
-        action_dim=action_dim,
+        state_dim=STATE_DIM,
+        action_dim=ACTION_DIM,
         actor_config=actor_config,
         critic_config=critic_config,
         actor_optimizer_config=actor_optimizer_config,
@@ -110,11 +109,19 @@ def safe_actor_critic():
 
 
 def test_safe_model_based_actor_critic(safe_actor_critic: SafeModelBasedActorCritic):
-    for _ in range(100):
-        safe_actor_critic.update(
-            DummmyModel(), np.zeros(STATE_DIM), jax.random.PRNGKey(0)
+    for i in range(100):
+        outs = safe_actor_critic.update(
+            DummmyModel(), np.zeros((BATCH_SIZE, STATE_DIM)), jax.random.PRNGKey(0)
         )
+        for k, v in outs.items():
+            print(k, v)
+        if i % 10 == 0:
+            policy = lambda state: safe_actor_critic.actor.act(
+                state, deterministic=True
+            )
+            objective, constraint = evaluate(policy)
+            print(f"Objective: {objective}, constraint: {constraint}")
     policy = lambda state: safe_actor_critic.actor.act(state, deterministic=True)
     objective, constraint = evaluate(policy)
-    assert objective > 0.15
+    assert objective > 20
     assert np.isclose(constraint, 0.0, 1e-4, 1e-6)
