@@ -106,6 +106,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             "agent/safety_critic/safe": results.safe.item(),
             "agent/safety_critic/constraint": results.constraint.item(),
             "agent/lbsgd/lr": results.new_actor_learning_state[0].lr.item(),
+            "agent/lbsgd/eta": results.new_actor_learning_state[0].eta.item(),
         }
 
 
@@ -157,7 +158,7 @@ def actor_loss_fn(
     constraint = safety_budget - safety_lambda_values.mean()
     loss = jnp.where(
         jnp.greater(constraint, 0.0),
-        loss - eta * jnp.log(constraint + 1e-3),
+        loss - eta * jnp.log(constraint + 1e-8),
         -backup_lr * constraint,
     )
     outs = jnp.stack([loss, constraint])

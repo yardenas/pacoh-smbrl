@@ -97,7 +97,7 @@ def safe_actor_critic(safe):
     eta = 0.1 if safe else 0.0
     m_0 = 5e3
     m_1 = 5e3
-    eta_rate = 8e-6
+    eta_rate = 1e-3
     base_lr = 3e-4
     key = jax.random.PRNGKey(0)
     return SafeModelBasedActorCritic(
