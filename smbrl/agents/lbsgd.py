@@ -41,20 +41,19 @@ def scale_by_lbsgd(
 def compute_lr(constraint, loss_grads, constraint_grads, m_0, m_1, eta):
     constraint_grads, _ = jax.flatten_util.ravel_pytree(constraint_grads)
     loss_grads, _ = jax.flatten_util.ravel_pytree(loss_grads)
-    # TODO (yarden): check that the axes here make sense?
-    projection = jnp.tensordot(constraint_grads, loss_grads, 1)
+    projection = constraint_grads.dot(loss_grads)
     lhs = constraint / (
         2.0
         + jnp.abs(projection) / jnp.linalg.norm(loss_grads)
-        + jnp.sqrt(constraint * m_1)  # TODO (yarden): this constraint cant be negative
+        + jnp.sqrt(constraint * m_1 + 1e-8)
     )
     m_2 = (
         m_0
-        + 4.0 * eta * (m_1 / (constraint + 1e-8))
-        + 4.0
+        + 10.0 * eta * (m_1 / (constraint + 1e-8))
+        + 8.0
         * eta
         * jnp.linalg.norm(projection) ** 2
-        / (jnp.linalg.norm(loss_grads**2) * constraint**2)
+        / ((jnp.linalg.norm(loss_grads) * constraint) ** 2)
     )
     rhs = 1.0 / (m_2 + 1e-8)
     return jnp.minimum(lhs, rhs)

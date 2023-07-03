@@ -103,7 +103,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             "agent/actor/loss": results.actor_loss.item(),
             "agent/critic/loss": results.critic_loss.item(),
             "agent/safety_critic/loss": results.safety_critic_loss.item(),
-            "agent/safe": results.safe.item(),
+            "agent/safety_critic/safe": results.safe.item(),
         }
 
 

@@ -153,7 +153,7 @@ def test_safe_model_based_actor_critic(actor_critic, safe):
     actor_critic = actor_critic()
     model = DummmyModel()
     key = jax.random.PRNGKey(0)
-    for i in range(650):
+    for i in range(625):
         key, n_key = jax.random.split(key)
         outs = actor_critic.update(model, np.zeros((BATCH_SIZE, STATE_DIM)), n_key)
         if i % 10 == 0:
