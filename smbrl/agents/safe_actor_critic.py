@@ -52,15 +52,15 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
         self.safety_critic_learner = Learner(
             self.safety_critic, critic_optimizer_config
         )
-        self.actor_learner = LBSGDLearner(
-            self.actor,
-            actor_optimizer_config,
-            eta,
-            m_0,
-            m_1,
-            eta_rate,
-            base_lr,
-        )
+        # self.actor_learner = LBSGDLearner(
+        #     self.actor,
+        #     actor_optimizer_config,
+        #     eta,
+        #     m_0,
+        #     m_1,
+        #     eta_rate,
+        #     base_lr,
+        # )
         self.safety_discount = safety_discount
         self.safety_budget = safety_budget
         self.backup_lr = base_lr
@@ -90,7 +90,8 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             self.safety_discount,
             self.lambda_,
             self.safety_budget,
-            self.actor_learner.state[0].eta,
+            # self.actor_learner.state[0].eta,
+            0.1,
             self.backup_lr,
         )
         self.actor = results.new_actor
@@ -104,6 +105,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             "agent/critic/loss": results.critic_loss.item(),
             "agent/safety_critic/loss": results.safety_critic_loss.item(),
             "agent/safety_critic/safe": results.safe.item(),
+            "agent/safety_critic/constraint": results.constraint.item(),
         }
 
 
@@ -127,6 +129,7 @@ class SafeActorCriticStepResults(NamedTuple):
     critic_loss: jax.Array
     safety_critic_loss: jax.Array
     safe: jax.Array
+    constraint: jax.Array
 
 
 def actor_loss_fn(
@@ -158,6 +161,7 @@ def actor_loss_fn(
         -backup_lr * constraint,
     )
     outs = jnp.stack([loss, constraint])
+    outs = loss
     return outs, ActorLossOuts(
         trajectories,
         lambda_values,
@@ -201,7 +205,25 @@ def safe_update_actor_critic(
 ):
     vmapped_rollout_fn = jax.vmap(rollout_fn, (None, 0, None, None))
     # Take gradients with respect to the loss function and the constraint in one go.
-    jacobian, rest = jacrev(
+    # jacobian, rest = jacrev(
+    #     lambda actor: actor_loss_fn(
+    #         actor,
+    #         critic,
+    #         safety_critic,
+    #         vmapped_rollout_fn,
+    #         horizon,
+    #         initial_states,
+    #         key,
+    #         discount,
+    #         safety_discount,
+    #         lambda_,
+    #         safety_budget,
+    #         eta,
+    #         backup_lr,
+    #     ),
+    #     has_aux=True,
+    # )(actor)
+    grads, rest = eqx.filter_grad(
         lambda actor: actor_loss_fn(
             actor,
             critic,
@@ -219,10 +241,13 @@ def safe_update_actor_critic(
         ),
         has_aux=True,
     )(actor)
-    loss_grads, constraint_grads = pytrees_unstack(jacobian)
     new_actor, new_actor_state = actor_learner.grad_step(
-        actor, (loss_grads, constraint_grads, rest.constraint), actor_learning_state
+        actor, grads, actor_learning_state
     )
+    # loss_grads, constraint_grads = pytrees_unstack(jacobian)
+    # new_actor, new_actor_state = actor_learner.grad_step(
+    # actor, (loss_grads, constraint_grads, rest.constraint), actor_learning_state
+    # )
     critic_loss, grads = eqx.filter_value_and_grad(ac.critic_loss_fn)(
         critic, rest.trajectories, rest.lambda_values
     )
@@ -246,4 +271,5 @@ def safe_update_actor_critic(
         critic_loss,
         safety_critic_loss,
         rest.safe,
+        rest.constraint,
     )

@@ -14,6 +14,7 @@ from smbrl.utils import Learner, inv_softplus
 
 class ContinuousActor(eqx.Module):
     net: eqx.nn.MLP
+    init_stddev: float = eqx.static_field()
 
     def __init__(
         self,
@@ -21,15 +22,18 @@ class ContinuousActor(eqx.Module):
         state_dim: int,
         action_dim: int,
         hidden_size: int,
+        init_stddev: float,
         *,
         key: jax.random.KeyArray,
     ):
         self.net = eqx.nn.MLP(state_dim, action_dim * 2, hidden_size, n_layers, key=key)
+        self.init_stddev = init_stddev
 
     def __call__(self, state: jax.Array) -> trx.Normal:
         x = self.net(state)
         mu, stddev = jnp.split(x, 2, axis=-1)
-        init_std = inv_softplus(5.0)
+        mu = jnp.zeros_like(mu)
+        init_std = inv_softplus(self.init_stddev)
         stddev = jnn.softplus(stddev + init_std) + 0.1
         dist = trx.Normal(mu, stddev)
         dist = trx.Transformed(dist, trx.Tanh())

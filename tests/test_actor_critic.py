@@ -58,14 +58,11 @@ class DummmyModel(types.Model):
 
 def step(state, action):
     pos, vel = state
-    delta = jnp.linalg.norm(pos - GOAL_X)
     distance_to_constraint = pos - CONSTRAINT_X
     new_vel = vel + action[0] * DT
     new_pos = pos + new_vel * DT
-    new_delta = jnp.linalg.norm(new_pos - GOAL_X)
     new_state = jnp.stack([new_pos, new_vel])
-    # Reach the goal as fast as possible.
-    reward = delta - new_delta
+    reward = new_pos * DT
     cost = sharp_sigmoid(distance_to_constraint, 10.0)
     return types.Prediction(new_state, reward, cost)
 
@@ -74,7 +71,7 @@ def optimal_policy(state, safe=False):
     if safe:
         d = CONSTRAINT_X
     else:
-        d = GOAL_X
+        d = jnp.inf
     a = jnp.where(state[0] < (d / 2.0), 1.0, -1.0)
     return jnp.asarray([a])
 
@@ -88,16 +85,16 @@ def evaluate(policy):
     return objective, constraint
 
 
-def safe_actor_critic():
-    actor_config = {"n_layers": 2, "hidden_size": 32}
-    critic_config = actor_config.copy()
+def safe_actor_critic(safe):
+    actor_config = {"n_layers": 2, "hidden_size": 32, "init_stddev": 5.0}
+    critic_config = {"n_layers": 2, "hidden_size": 32}
     actor_optimizer_config = {"lr": 8e-5, "eps": 1e-5, "clip": 0.5}
     critic_optimizer_config = {"lr": 3e-4, "eps": 1e-5, "clip": 0.5}
     discount = 0.99
     safety_discount = 0.99
     lambda_ = 0.97
     safety_budget = 0.0
-    eta = 0.1
+    eta = 0.1 if safe else 0.0
     m_0 = 1e4
     m_1 = 1e4
     eta_rate = 8e-6
@@ -125,8 +122,8 @@ def safe_actor_critic():
 
 
 def actor_critic():
-    actor_config = {"n_layers": 2, "hidden_size": 32}
-    critic_config = actor_config.copy()
+    actor_config = {"n_layers": 2, "hidden_size": 32, "init_stddev": 2.5}
+    critic_config = {"n_layers": 2, "hidden_size": 32}
     actor_optimizer_config = {"lr": 8e-5, "eps": 1e-5, "clip": 0.5}
     critic_optimizer_config = {"lr": 3e-4, "eps": 1e-5, "clip": 0.5}
     discount = 0.99
@@ -146,11 +143,9 @@ def actor_critic():
     )
 
 
-@pytest.mark.parametrize(
-    "actor_critic,safe", [(actor_critic, False), (safe_actor_critic, True)]
-)
-def test_safe_model_based_actor_critic(actor_critic, safe):
-    actor_critic = actor_critic()
+@pytest.mark.parametrize("safe", [(False), (True)])
+def test_safe_model_based_actor_critic(safe):
+    actor_critic = safe_actor_critic(safe)
     model = DummmyModel()
     key = jax.random.PRNGKey(0)
     for i in range(625):
@@ -170,3 +165,21 @@ def test_safe_model_based_actor_critic(actor_critic, safe):
     assert np.isclose(objective, solution_objective, 1e-1, 1e-1)
     if safe:
         assert np.isclose(constraint, solution_constraint, 1e-4, 1e-6)
+
+
+def test_model_based_actor_critic(actor_critic):
+    model = DummmyModel()
+    key = jax.random.PRNGKey(0)
+    for i in range(625):
+        key, n_key = jax.random.split(key)
+        outs = actor_critic.update(model, np.zeros((BATCH_SIZE, STATE_DIM)), n_key)
+        if i % 10 == 0:
+            for k, v in outs.items():
+                print(k, v)
+            policy = lambda state: actor_critic.actor.act(state, deterministic=True)
+            objective, constraint = evaluate(policy)
+            print(f"------Objective: {objective}, constraint: {constraint}------")
+    policy = lambda state: actor_critic.actor.act(state, deterministic=True)
+    objective, constraint = evaluate(policy)
+    solution_objective, _ = evaluate(lambda s: optimal_policy(s, False))
+    assert np.isclose(objective, solution_objective, 1e-1, 1e-1)
