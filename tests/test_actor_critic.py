@@ -86,17 +86,17 @@ def evaluate(policy):
 
 
 def safe_actor_critic(safe):
-    actor_config = {"n_layers": 2, "hidden_size": 32, "init_stddev": 5.0}
+    actor_config = {"n_layers": 2, "hidden_size": 32, "init_stddev": 2.5}
     critic_config = {"n_layers": 2, "hidden_size": 32}
     actor_optimizer_config = {"lr": 8e-5, "eps": 1e-5, "clip": 0.5}
     critic_optimizer_config = {"lr": 3e-4, "eps": 1e-5, "clip": 0.5}
     discount = 0.99
-    safety_discount = 0.99
+    safety_discount = 0.995
     lambda_ = 0.97
     safety_budget = 0.0
     eta = 0.1 if safe else 0.0
-    m_0 = 1e4
-    m_1 = 1e4
+    m_0 = 5e3
+    m_1 = 5e3
     eta_rate = 8e-6
     base_lr = 3e-4
     key = jax.random.PRNGKey(0)

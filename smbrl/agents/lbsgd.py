@@ -14,6 +14,7 @@ from smbrl.utils import Learner
 
 class LBSGDState(NamedTuple):
     eta: jax.Array
+    lr: jax.Array
 
 
 def scale_by_lbsgd(
@@ -23,17 +24,20 @@ def scale_by_lbsgd(
 
     def init_fn(params):
         del params
-        return LBSGDState(eta)
+        return LBSGDState(eta, base_lr)
 
     def update_fn(updates, state, params=None):
         del params
         loss_grads, constraints_grads, constraint = updates
         eta_t = state.eta
-        lr = compute_lr(constraint, loss_grads, constraints_grads, m_0, m_1, eta_t)
-        lr = jnp.where(jnp.isfinite(lr) & jnp.greater_equal(lr, 0.0), lr, base_lr)
+        lr = jnp.where(
+            jnp.greater(constraint, 0.0),
+            compute_lr(constraint, loss_grads, constraints_grads, m_0, m_1, eta_t),
+            base_lr,
+        )
         new_eta = eta / eta_rate
         updates = jax.tree_map(lambda x: x * lr, loss_grads)
-        return updates, LBSGDState(new_eta)
+        return updates, LBSGDState(new_eta, lr)
 
     return base.GradientTransformation(init_fn, update_fn)
 
@@ -42,10 +46,14 @@ def compute_lr(constraint, loss_grads, constraint_grads, m_0, m_1, eta):
     constraint_grads, _ = jax.flatten_util.ravel_pytree(constraint_grads)
     loss_grads, _ = jax.flatten_util.ravel_pytree(loss_grads)
     projection = constraint_grads.dot(loss_grads)
-    lhs = constraint / (
-        2.0
-        + jnp.abs(projection) / jnp.linalg.norm(loss_grads)
-        + jnp.sqrt(constraint * m_1 + 1e-8)
+    lhs = (
+        constraint
+        / (
+            2.0
+            + jnp.abs(projection) / jnp.linalg.norm(loss_grads)
+            + jnp.sqrt(constraint * m_1 + 1e-8)
+        )
+        / jnp.linalg.norm(loss_grads)
     )
     m_2 = (
         m_0
@@ -73,6 +81,6 @@ class LBSGDLearner(Learner):
         self.optimizer = optax.chain(
             scale_by_lbsgd(eta, m_0, m_1, eta_rate, base_lr),
             optax.scale_by_adam(eps=optimizer_config.get("eps", 1e-8)),
-            optax.scale(-optimizer_config.get("lr", 1e-3)),
+            optax.scale(-1.0),
         )
         self.state = self.optimizer.init(eqx.filter(model, eqx.is_array))

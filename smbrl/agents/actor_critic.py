@@ -32,7 +32,6 @@ class ContinuousActor(eqx.Module):
     def __call__(self, state: jax.Array) -> trx.Normal:
         x = self.net(state)
         mu, stddev = jnp.split(x, 2, axis=-1)
-        mu = jnp.zeros_like(mu)
         init_std = inv_softplus(self.init_stddev)
         stddev = jnn.softplus(stddev + init_std) + 0.1
         dist = trx.Normal(mu, stddev)
