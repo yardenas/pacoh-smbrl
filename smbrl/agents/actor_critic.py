@@ -127,8 +127,8 @@ class ModelBasedActorCritic:
         self.actor_learner.state = results.new_actor_learning_state
         self.critic_learner.state = results.new_critic_learning_state
         return {
-            "agent/actor/loss": results.actor_loss.item(),
-            "agent/critic/loss": results.critic_loss.item(),
+            "agent/actor/loss": results.actor_loss.mean().item(),
+            "agent/critic/loss": results.critic_loss.mean().item(),
         }
 
 
