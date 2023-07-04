@@ -121,6 +121,7 @@ def safe_actor_critic(safe):
     )
 
 
+@pytest.fixture
 def actor_critic():
     actor_config = {"n_layers": 2, "hidden_size": 32, "init_stddev": 2.5}
     critic_config = {"n_layers": 2, "hidden_size": 32}
