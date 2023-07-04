@@ -12,7 +12,6 @@ ACTION_DIM = 1
 DT = 0.1
 TIME_HORIZON = 50
 BATCH_SIZE = 1024
-GOAL_X = 6.25
 CONSTRAINT_X = 5.5
 
 
@@ -63,7 +62,7 @@ def step(state, action):
     new_pos = pos + new_vel * DT
     new_state = jnp.stack([new_pos, new_vel])
     reward = new_pos * DT
-    cost = sharp_sigmoid(distance_to_constraint, 10.0)
+    cost = sharp_sigmoid(distance_to_constraint, 5.0)
     return types.Prediction(new_state, reward, cost)
 
 
@@ -86,18 +85,18 @@ def evaluate(policy):
 
 
 def safe_actor_critic(safe):
-    actor_config = {"n_layers": 2, "hidden_size": 32, "init_stddev": 2.5}
+    actor_config = {"n_layers": 2, "hidden_size": 32, "init_stddev": 1.5}
     critic_config = {"n_layers": 2, "hidden_size": 32}
     actor_optimizer_config = {"lr": 8e-5, "eps": 1e-5, "clip": 0.5}
     critic_optimizer_config = {"lr": 3e-4, "eps": 1e-5, "clip": 0.5}
     discount = 0.99
-    safety_discount = 0.995
+    safety_discount = 0.99
     lambda_ = 0.97
     safety_budget = 0.0
     eta = 0.1 if safe else 0.0
     m_0 = 5e3
     m_1 = 5e3
-    eta_rate = 1e-3
+    eta_rate = 1e-4
     base_lr = 3e-4
     key = jax.random.PRNGKey(0)
     return SafeModelBasedActorCritic(

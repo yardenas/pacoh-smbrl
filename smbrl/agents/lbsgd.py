@@ -49,8 +49,7 @@ def compute_lr(constraint, loss_grads, constraint_grads, m_0, m_1, eta):
     lhs = (
         constraint
         / (
-            2.0
-            + jnp.abs(projection) / jnp.linalg.norm(loss_grads)
+            2.0 * jnp.abs(projection) / jnp.linalg.norm(loss_grads)
             + jnp.sqrt(constraint * m_1 + 1e-8)
         )
         / jnp.linalg.norm(loss_grads)
