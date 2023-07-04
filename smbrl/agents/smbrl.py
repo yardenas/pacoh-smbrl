@@ -96,11 +96,9 @@ class SMBRL(AgentBase):
         for batch in self.replay_buffer.sample(self.config.agent.update_steps):
             self.update_model(batch)
             initial_states = batch.observation.reshape(-1, batch.observation.shape[-1])
-            actor_loss, critic_loss = self.actor_critic.update(
-                self.model, initial_states, next(self.prng)
-            )
-            self.logger["agent/actor/loss"] = float(actor_loss.mean())
-            self.logger["agent/critic/loss"] = float(critic_loss.mean())
+            outs = self.actor_critic.update(self.model, initial_states, next(self.prng))
+            for k, v in outs.items():
+                self.logger[k] = v
 
     def update_model(self, batch: TrajectoryData) -> None:
         regression_batch = ml.prepare_data(batch)

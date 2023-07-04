@@ -15,6 +15,7 @@ model:
 actor:
   n_layers: 2
   hidden_size: 128
+  init_stddev: 5.
 critic:
   n_layers: 2
   hidden_size: 128

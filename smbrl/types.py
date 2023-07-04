@@ -94,6 +94,7 @@ class RolloutFn(Protocol):
 class Prediction(NamedTuple):
     next_state: jax.Array
     reward: jax.Array
+    cost: Optional[jax.Array] = None
     next_state_stddev: Optional[jax.Array] = None
     reward_stddev: Optional[jax.Array] = None
 

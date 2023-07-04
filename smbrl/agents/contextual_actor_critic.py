@@ -99,7 +99,10 @@ class ContextualModelBasedActorCritic(ac.ModelBasedActorCritic):
         self.critic = results.new_critic
         self.actor_learner.state = results.new_actor_learning_state
         self.critic_learner.state = results.new_critic_learning_state
-        return results.actor_loss, results.critic_loss
+        return {
+            "agent/actor/loss": results.actor_loss.item(),
+            "agent/critic/loss": results.critic_loss.item(),
+        }
 
     def contextualize(self, belief: maki.ShiftScale):
         self.belief = belief
