@@ -35,7 +35,7 @@ def scale_by_lbsgd(
             compute_lr(constraint, loss_grads, constraints_grads, m_0, m_1, eta_t),
             base_lr,
         )
-        new_eta = eta_t / eta_rate
+        new_eta = jnp.where(jnp.greater(constraint, 0.0), eta_t / eta_rate, eta_t)
         updates = jax.tree_map(lambda x: x * lr, loss_grads)
         return updates, LBSGDState(new_eta, lr)
 
