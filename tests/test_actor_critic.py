@@ -145,8 +145,6 @@ def actor_critic():
 
 @pytest.mark.parametrize("safe", [(False), (True)])
 def test_safe_model_based_actor_critic(safe):
-    # from jax.config import config
-    # config.update('jax_disable_jit', True)
     actor_critic = safe_actor_critic(safe)
     model = DummmyModel()
     key = jax.random.PRNGKey(0)
