@@ -1,11 +1,16 @@
+import logging
 import os
 from typing import Any, Iterable, List, Optional
 
 import cloudpickle
 from omegaconf import DictConfig
 
-from smbrl import acting, agents, episodic_async_env, logging, utils
+from smbrl import acting, agents, episodic_async_env
+from smbrl import logging as rllogging
+from smbrl import utils
 from smbrl.types import Agent, EnvironmentFactory, TaskSampler
+
+log = logging.getLogger("trainer")
 
 
 class Trainer:
@@ -26,14 +31,14 @@ class Trainer:
         self.epoch = start_epoch
         self.step = step
         self.seeds = seeds
-        self.logger: Optional[logging.TrainingLogger] = None
-        self.state_writer: Optional[logging.StateWriter] = None
+        self.logger: Optional[rllogging.TrainingLogger] = None
+        self.state_writer: Optional[rllogging.StateWriter] = None
         self.env: Optional[episodic_async_env.EpisodicAsync] = None
 
     def __enter__(self):
         log_path = os.getcwd()
-        self.logger = logging.TrainingLogger(log_path)
-        self.state_writer = logging.StateWriter(log_path)
+        self.logger = rllogging.TrainingLogger(log_path)
+        self.state_writer = rllogging.StateWriter(log_path)
         self.env = episodic_async_env.EpisodicAsync(
             self.make_env,
             self.config.training.parallel_envs,
@@ -64,14 +69,14 @@ class Trainer:
         epoch, logger, state_writer = self.epoch, self.logger, self.state_writer
         assert logger is not None and state_writer is not None
         for epoch in range(epoch, epochs or self.config.training.epochs):
-            print(f"Training epoch #{epoch}")
+            log.info(f"Training epoch #{epoch}")
             self._step(
                 train=True,
                 episodes_per_task=self.config.training.episodes_per_task,
                 prefix="train",
             )
             if (epoch + 1) % self.config.training.eval_every == 0:
-                print("Evaluating...")
+                log.info("Evaluating...")
                 self._step(
                     train=False,
                     episodes_per_task=self.config.training.eval_episodes_per_task,
@@ -147,7 +152,7 @@ class Trainer:
             make_env, env_rs, agent, epoch, step, task_sampler = cloudpickle.load(
                 f
             ).values()
-        print(f"Resuming experiment from: {log_path}...")
+        log.info(f"Resuming experiment from: {log_path}...")
         assert agent.config == config, "Loaded different hyperparameters."
         return cls(
             config=agent.config,

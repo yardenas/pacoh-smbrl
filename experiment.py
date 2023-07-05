@@ -1,13 +1,17 @@
+import logging
+
 import hydra
 from omegaconf import OmegaConf
 
 from smbrl import tasks
 from smbrl.trainer import Trainer
 
+log = logging.getLogger("experiment")
+
 
 @hydra.main(version_base=None, config_path="smbrl/configs", config_name="config")
 def experiment(cfg):
-    print(
+    log.info(
         f"Setting up experiment with the following configuration: "
         f"\n{OmegaConf.to_yaml(cfg)}"
     )
