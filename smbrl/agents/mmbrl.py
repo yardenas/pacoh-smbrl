@@ -147,6 +147,8 @@ class MMBRL(AgentBase):
         trajectories = self.adaptation_buffer.get()
         self.context_belief = infer_context(trajectories, self.model)
         evaluate_model(self.model, trajectories, self.context_belief)
+        # TODO (yarden): can take gradient steps on the policy as well
+        #  (and basically specialize it to the test tasks).
 
     def update(self) -> None:
         for batch in self.replay_buffer.sample(self.config.agent.update_steps):
