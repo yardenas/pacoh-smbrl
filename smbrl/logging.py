@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from collections import defaultdict
 from queue import Queue
@@ -12,6 +13,8 @@ from tabulate import tabulate
 from tensorboardX import SummaryWriter
 
 from smbrl import metrics as m
+
+log = logging.getLogger("logger")
 
 
 class TrainingLogger:
@@ -51,7 +54,7 @@ class TrainingLogger:
             result = v.result
             table.append([k, result.mean, result.std, result.min, result.max])
             v.reset_states()
-        print(
+        log.info(
             tabulate(
                 table,
                 headers=["Metric", "Mean", "Std", "Min", "Max"],

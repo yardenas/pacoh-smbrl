@@ -1,5 +1,5 @@
 submitit_folder: ${hydra.sweep.dir}/.submitit/%j
-timeout_min: 60
+timeout_min: 30
 cpus_per_task: 20
 tasks_per_node: 1
 mem_gb: null
@@ -11,4 +11,3 @@ mem_per_cpu: 5120
 account: ls_krausea
 additional_parameters: {"gpus": "rtx_2080_ti:1", "account": "ls_krausea"}
 array_parallelism: 256
-srun_args: ['--gpu-bind=single:1']

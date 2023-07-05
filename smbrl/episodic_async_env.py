@@ -1,5 +1,6 @@
 import atexit
 import functools
+import logging
 import multiprocessing as mp
 import sys
 import traceback
@@ -14,6 +15,8 @@ from gymnasium.wrappers.rescale_action import RescaleAction
 from gymnasium.wrappers.time_limit import TimeLimit
 
 from smbrl import wrappers
+
+log = logging.getLogger("async_env")
 
 
 class Protocol(Enum):
@@ -213,7 +216,7 @@ def _worker(ctor, conn, time_limit, action_repeat):
             raise KeyError(f"Received message of unknown type {message}")
     except Exception:
         stacktrace = "".join(traceback.format_exception(*sys.exc_info()))
-        print(f"Error in environment process: {stacktrace}")
+        log.error(f"Error in environment process: {stacktrace}")
         conn.send((Protocol.EXCEPTION, stacktrace))
     finally:
         conn.close()
