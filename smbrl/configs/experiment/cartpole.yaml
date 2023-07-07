@@ -5,4 +5,3 @@ training:
   eval_every: 2
   time_limit: 1000
   adaptation_budget: 5
-  environment: cartpole_swingup

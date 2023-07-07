@@ -13,7 +13,7 @@ def make(cfg: DictConfig) -> MetaEnvironmentFactory:
     match env:
         case "pendulum":
             make_env, make_sampler = pendulum.make(cfg)
-        case env if any(env in t_group for t_group in rlwr_tasks):
+        case _ if any(env in t_group for t_group in rlwr_tasks):
             make_env, make_sampler = rwrl_factory.make(cfg)
         case _:
             raise NotImplementedError

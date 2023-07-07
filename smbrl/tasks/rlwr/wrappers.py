@@ -84,6 +84,8 @@ def convert_dm_control_to_gym_space(dm_control_space):
 class DMCWrapper:
     """Wrapper to convert DeepMind Control tasks to OpenAI Gym format."""
 
+    spec: None = None
+
     def __init__(self, domain_name, task_name):
         """Initializes DeepMind Control tasks.
 
@@ -161,7 +163,8 @@ class DMCWrapper:
         Returns:
             s (np.ndarray): flattened next state
             r (float): reward
-            d (bool): done flag
+            t (bool): terminal flag
+            truncated (bool): truncated flag
             info (dict): dictionary with additional environment info
         """
         time_step = self.env.step(a)
@@ -174,9 +177,9 @@ class DMCWrapper:
         }
         observation = self._filter_observation(time_step.observation)
         s = spaces.utils.flatten(self.observation_space, observation)
-        return s, r, d, info
+        return s, r, False, d, info
 
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
         """Resets environment and returns flattened initial state."""
         time_step = self.env.reset()
         observation = self._filter_observation(time_step.observation)
@@ -221,11 +224,12 @@ class RWRLWrapper(DMCWrapper):
         Returns:
             s (np.ndarray): flattened next state
             r (float): reward
-            d (bool): done flag
+            t (bool): terminal flag
+            truncated (bool): truncated flag
             info (dict): dictionary with additional environment info
         """
-        s, r, d, info = super(RWRLWrapper, self).step(a)
+        s, r, t, d, info = super(RWRLWrapper, self).step(a)
         constraints = info.get("constraints", np.array([True]))
         cost = 1.0 - np.all(constraints)
         info["cost"] = cost
-        return s, r, d, info
+        return s, r, t, d, info

@@ -1,4 +1,5 @@
 import pytest
+from gymnasium.wrappers.time_limit import TimeLimit
 from hydra import compose, initialize
 
 from smbrl import tasks
@@ -77,3 +78,30 @@ def test_no_pertubations(cfg):
     _, task_sampler = tasks.make(cfg)
     params_a = [p for p in task_sampler(5)]
     assert all(p is None for p in params_a)
+
+
+def test_basic_ops(cfg):
+    make_env, _ = tasks.make(cfg)
+    env = TimeLimit(make_env(), cfg.training.time_limit)
+    env.seed(1)
+    _ = env.reset()
+    count = 0
+    while True:
+        count += 1
+        *_, terminal, truncated, _ = env.step(env.action_space.sample())
+        if truncated:
+            assert not terminal
+            break
+    _ = env.reset()
+    assert count == cfg.training.time_limit
+
+
+def test_external_perturb(cfg):
+    cfg.environment.cartpole.perturb_spec = PERTURB
+    make_env, task_sampler = tasks.make(cfg)
+    env = make_env()
+    param = next(task_sampler(1))
+    env.reset(options={"task": param})
+    assert env.env.env._task._perturb_cur == param
+    env.env.env._task.update_physics()
+    assert env.env.env._task._perturb_cur == param
