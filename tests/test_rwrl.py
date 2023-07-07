@@ -13,6 +13,9 @@ PERTURB = {
     "enable": True,
     "period": 1,
     "scheduler": "uniform",
+    "param": "pole_length",
+    "min": 0.75,
+    "max": 1.25,
 }
 
 
@@ -38,6 +41,16 @@ def cfg():
             ],
         )
         return cfg
+
+
+def test_min_max(cfg):
+    cfg.environment.cartpole.perturb_spec = PERTURB
+    _, task_sampler = tasks.make(cfg)
+    params = [params for params in task_sampler(1000)]
+    min_, max_ = min(params), max(params)
+    print(f"min^: {min_}, min: {PERTURB['min']}. max^: {max_}, max: {PERTURB['max']}")
+    assert min_ >= PERTURB["min"]
+    assert max_ <= PERTURB["max"]
 
 
 def test_same_params(cfg):

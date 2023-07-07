@@ -5,8 +5,10 @@ cartpole:
     observations: True
     safety_coeff: 0.3
     constraints: slider_pos_constraint
-    
   perturb_spec:
-    enable: False
-    period: 0
+    enable: True
+    period: 1
     scheduler: constant
+    param: pole_length
+    min: 0.75
+    max: 1.25
