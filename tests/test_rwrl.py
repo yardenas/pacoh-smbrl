@@ -75,6 +75,18 @@ def test_different_params(cfg):
     ), f"params_a: {params_a}, params_b: {params_b}"
 
 
+def test_not_all_ones(cfg):
+    n_tasks = 10
+    cfg.training.num_tasks = n_tasks
+    cfg.environment.cartpole.perturb_spec = PERTURB
+    _, task_sampler = tasks.make(cfg)
+    params_a = [p for p in task_sampler(n_tasks)]
+    params_b = [1] * n_tasks
+    assert any(
+        p != o for p, o in zip(params_a, params_b)
+    ), f"params_a: {params_a}, params_b: {params_b}"
+
+
 def test_no_pertubations(cfg):
     cfg.environment.cartpole.perturb_spec = NO_PERTURB
     _, task_sampler = tasks.make(cfg)
