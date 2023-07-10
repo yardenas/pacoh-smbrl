@@ -4,10 +4,6 @@ import copy
 from collections import OrderedDict
 
 import numpy as np
-import realworldrl_suite.environments as rwrl
-from dm_control.suite.wrappers import action_scale
-from dm_env import specs
-from gymnasium import spaces
 
 
 def make_rwrl_env(domain_name, task_name, env_setup_kwargs):
@@ -31,6 +27,9 @@ def convert_dm_control_to_gym_space(dm_control_space):
     To handle dm_control observation_specs as inputs, we check the following
     input types in order to enable recursive calling on each nested item.
     """
+    from dm_env import specs
+    from gymnasium import spaces
+
     if isinstance(dm_control_space, specs.BoundedArray):
         shape = dm_control_space.shape
         low = np.broadcast_to(dm_control_space.minimum, shape)
@@ -107,6 +106,9 @@ class DMCWrapper:
             env (object): DeepMind Control Suite environment
             exclude_keys (list): list of keys to exclude from observation
         """
+        from dm_control.suite.wrappers import action_scale
+        from dm_env import specs
+
         assert isinstance(env.observation_spec(), OrderedDict)
         assert isinstance(env.action_spec(), specs.BoundedArray)
 
@@ -176,15 +178,13 @@ class DMCWrapper:
             if key not in self.observation_keys
         }
         observation = self._filter_observation(time_step.observation)
-        s = spaces.utils.flatten(self.observation_space, observation)
-        return s, r, False, d, info
+        return observation, r, False, d, info
 
     def reset(self, *, seed=None, options=None):
         """Resets environment and returns flattened initial state."""
         time_step = self.env.reset()
         observation = self._filter_observation(time_step.observation)
-        s = spaces.utils.flatten(self.observation_space, observation)
-        return s
+        return observation, {}
 
     def seed(self, seed):
         self.env.task._random = np.random.RandomState(seed)
@@ -194,6 +194,10 @@ class DMCWrapper:
         if camera_id is None:
             camera_id = -1
         return self.env.physics.render(camera_id=camera_id)
+
+    @property
+    def np_random(self):
+        return self.env.task._random
 
 
 class RWRLWrapper(DMCWrapper):
@@ -206,6 +210,8 @@ class RWRLWrapper(DMCWrapper):
             domain_name (str): name of RWRL Suite domain
             task_name (str): name of RWRL Suite task
         """
+        import realworldrl_suite.environments as rwrl
+
         env = rwrl.load(
             domain_name=domain_name,
             task_name=task_name,

@@ -3,6 +3,7 @@ import os
 from typing import Any, Iterable, List, Optional
 
 import cloudpickle
+import numpy as np
 from omegaconf import DictConfig
 
 from smbrl import acting, agents, episodic_async_env
@@ -137,7 +138,7 @@ class Trainer:
         ]
         if not rs:
             rs = [
-                state.bit_generator.state["state"]["state"]
+                infer_and_extract_state(state)
                 for state in self.env.get_attr("np_random")
             ]
         return rs
@@ -173,3 +174,10 @@ class Trainer:
             "step": self.step,
             "task_sampler": self.tasks_sampler,
         }
+
+
+def infer_and_extract_state(state):
+    if isinstance(state, np.random.RandomState):
+        return state.get_state()[1]
+    else:
+        return state.bit_generator.state["state"]["state"]
