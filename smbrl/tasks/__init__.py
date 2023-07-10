@@ -1,8 +1,6 @@
 from omegaconf import DictConfig
-from realworldrl_suite.environments import ALL_TASKS as rlwr_tasks
 
-from smbrl.tasks import pendulum
-from smbrl.tasks.rlwr import env_factory as rwrl_factory
+from smbrl.tasks.rlwr import TASKS as rwrl_tasks
 from smbrl.types import MetaEnvironmentFactory
 from smbrl.utils import fix_task_sampling
 
@@ -12,8 +10,12 @@ def make(cfg: DictConfig) -> MetaEnvironmentFactory:
     env = list(cfg.environment.keys())[0]
     match env:
         case "pendulum":
+            from smbrl.tasks import pendulum
+
             make_env, make_sampler = pendulum.make(cfg)
-        case _ if any(env in t_group for t_group in rlwr_tasks):
+        case _ if any(env in t_group for t_group in rwrl_tasks):
+            from smbrl.tasks.rlwr import env_factory as rwrl_factory
+
             make_env, make_sampler = rwrl_factory.make(cfg)
         case _:
             raise NotImplementedError

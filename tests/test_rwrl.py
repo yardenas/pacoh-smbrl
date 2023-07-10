@@ -116,6 +116,6 @@ def test_external_perturb(cfg):
     env = make_env()
     param = next(task_sampler(1))
     env.reset(options={"task": param})
-    assert env.env.env._task._perturb_cur == param
-    env.env.env._task.update_physics()
-    assert env.env.env._task._perturb_cur == param
+    assert env.env.env.env.task._perturb_cur == param
+    env.env.env.env.task.update_physics()
+    assert env.env.env.env.task._perturb_cur == param
