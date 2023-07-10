@@ -176,15 +176,13 @@ class DMCWrapper:
             if key not in self.observation_keys
         }
         observation = self._filter_observation(time_step.observation)
-        s = spaces.utils.flatten(self.observation_space, observation)
-        return s, r, False, d, info
+        return observation, r, False, d, info
 
     def reset(self, *, seed=None, options=None):
         """Resets environment and returns flattened initial state."""
         time_step = self.env.reset()
         observation = self._filter_observation(time_step.observation)
-        s = spaces.utils.flatten(self.observation_space, observation)
-        return s
+        return observation, {}
 
     def seed(self, seed):
         self.env.task._random = np.random.RandomState(seed)

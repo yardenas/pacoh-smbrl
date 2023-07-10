@@ -98,7 +98,7 @@ def test_basic_ops(cfg):
     make_env, _ = tasks.make(cfg)
     env = TimeLimit(make_env(), cfg.training.time_limit)
     env.seed(1)
-    _ = env.reset()
+    env.reset()
     count = 0
     while True:
         count += 1

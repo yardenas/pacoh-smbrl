@@ -4,6 +4,7 @@ from typing import Any, Callable, Iterable, Optional
 import realworldrl_suite.environments as rwrl
 from gymnasium import Env
 from gymnasium.spaces import Box
+from gymnasium.wrappers.flatten_observation import FlattenObservation
 from omegaconf import DictConfig
 from realworldrl_suite.environments.realworld_env import Base
 
@@ -58,8 +59,8 @@ rwrl_constraints_combined = {
 
 
 def alter_task(env: RWRLWrapper, param: float):
-    env.env._task._perturb_cur = param
-    env.env._task._physics = env.env._task.update_physics()
+    env.env.env._task._perturb_cur = param
+    env.env.env._task._physics = env.env.env._task.update_physics()
 
 
 def sampler_factory(
@@ -112,8 +113,9 @@ def make_env_factory(cfg: DictConfig) -> Callable[[], Env[Box, Box]]:
             augment_constraint(task_cfg.safety_spec, domain_name, task_cfg.constraints),
             {"enable": False, "period": 0, "scheduler": "constant"},
         )
-        env.seed(cfg.training.seed)
-        meta_env = MetaEnv(env, alter_task)
+        flat_env = FlattenObservation(env)  # type: ignore
+        flat_env.seed(cfg.training.seed)
+        meta_env = MetaEnv(flat_env, alter_task)
         return meta_env
 
     return make_env
