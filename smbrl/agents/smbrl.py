@@ -18,7 +18,9 @@ from smbrl.utils import Learner, add_to_buffer, normalize
 
 @eqx.filter_jit
 def policy(actor, observation, key):
-    return jax.vmap(lambda o: actor.act(o, key))(observation)
+    return jax.vmap(lambda o, k: actor.act(o, k))(
+        observation, jax.random.split(key, observation.shape[0])
+    )
 
 
 class SMBRL(AgentBase):

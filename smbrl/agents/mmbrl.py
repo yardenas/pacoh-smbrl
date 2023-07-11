@@ -51,7 +51,9 @@ def actor_critic_factory(observation_space, action_space, config, key, belief):
 
 @eqx.filter_jit
 def policy(actor, observation, key):
-    return jax.vmap(lambda o: actor.act(o, key))(observation)
+    return jax.vmap(lambda o, k: actor.act(o, k))(
+        observation, jax.random.split(key, observation.state.shape[0])
+    )
 
 
 class MMBRL(AgentBase):
