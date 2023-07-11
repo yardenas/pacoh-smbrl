@@ -77,7 +77,7 @@ class FeedForwardModel(eqx.Module):
             prev_state = carry
             if callable_policy:
                 key = x
-                action = policy(jax.lax.stop_gradient(prev_state))
+                action = policy(jax.lax.stop_gradient(prev_state), key)
             else:
                 action, key = x
             out = self.step(

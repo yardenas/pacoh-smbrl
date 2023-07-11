@@ -158,9 +158,7 @@ def actor_loss_fn(
     discount: float,
     lambda_: float,
 ) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
-    traj_key, policy_key = jax.random.split(key, 2)
-    policy = lambda state: actor.act(state, key=policy_key)
-    trajectories = rollout_fn(horizon, initial_states, traj_key, policy)
+    trajectories = rollout_fn(horizon, initial_states, key, actor.act)
     # vmap over batch and time axes.
     bootstrap_values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
     lambda_values = eqx.filter_vmap(compute_lambda_values)(

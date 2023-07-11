@@ -232,7 +232,7 @@ class WorldModel(eqx.Module):
             prev_belief_state = carry
             if callable_policy:
                 key = x
-                action = policy(jax.lax.stop_gradient(prev_belief_state))
+                action = policy(jax.lax.stop_gradient(prev_belief_state), key)
             else:
                 action, key = x
             out = self.dynamics.step(
