@@ -133,9 +133,9 @@ class ModelBasedActorCritic:
 
 
 def discounted_cumsum(x: jax.Array, discount: float) -> jax.Array:
-    # Divide by discount to have the first discount value from 1: [1, discount,
-    # discount^2 ...]
-    scales = jnp.cumprod(jnp.ones_like(x) * discount) / discount
+    # [1, discount, discount^2 ...]
+    scales = jnp.cumprod(jnp.ones_like(x)[:-1] * discount)
+    scales = jnp.concatenate([jnp.ones_like(scales[:1]), scales], -1)
     # Flip scales since jnp.convolve flips it as default.
     return jnp.convolve(x, scales[::-1])[-x.shape[0] :]
 
