@@ -68,11 +68,11 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
 
     def update(
         self,
-        model: types.Model,
+        sample: types.RolloutFn,
         initial_states: types.FloatArray,
         key: jax.random.KeyArray,
     ) -> dict[str, float]:
-        actor_critic_fn = partial(self.update_fn, model.sample)
+        actor_critic_fn = partial(self.update_fn, sample)
         results: SafeActorCriticStepResults = actor_critic_fn(
             self.horizon,
             initial_states,
