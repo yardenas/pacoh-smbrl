@@ -14,7 +14,7 @@ from smbrl.agents.base import AgentBase
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
-from smbrl.types import FloatArray, Policy, Prediction
+from smbrl.types import FloatArray
 from smbrl.utils import Learner, add_to_buffer, normalize
 
 
@@ -134,9 +134,7 @@ class SMBRL(AgentBase):
             initial_states = inferrered_rssm_states.reshape(
                 -1, inferrered_rssm_states.shape[-1]
             )
-            outs = self.actor_critic.update(
-                flatten_states(self.model.sample, 64), initial_states, next(self.prng)
-            )
+            outs = self.actor_critic.update(self.model, initial_states, next(self.prng))
             for k, v in outs.items():
                 self.logger[k] = v
 
@@ -175,17 +173,3 @@ def prepare_features(batch: TrajectoryData) -> tuple[rssm.Features, FloatArray]:
     flat = lambda x: x.reshape(-1, *x.shape[2:])
     features = jax.tree_map(flat, features)
     return features, flat(batch.action)
-
-
-def flatten_states(sample_fn, stochastic_size):
-    def flattened_sample(
-        horizon: int,
-        state: jax.Array,
-        key: jax.random.KeyArray,
-        policy: Policy,
-    ):
-        state = rssm.State.from_flat(state, stochastic_size)
-        prediction, state = sample_fn(horizon, state, key, policy)
-        return Prediction(state, prediction.reward, prediction.cost)
-
-    return flattened_sample

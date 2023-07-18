@@ -161,7 +161,7 @@ class MMBRL(AgentBase):
             if self.contextual:
                 self.actor_critic.contextualize(context_posterior)
             outs = self.actor_critic.update(
-                self.model.sample,
+                self.model,
                 initial_states,
                 next(self.prng),
             )

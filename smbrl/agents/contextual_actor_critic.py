@@ -76,11 +76,11 @@ class ContextualModelBasedActorCritic(ac.ModelBasedActorCritic):
 
     def update(
         self,
-        sample: types.RolloutFn,
+        model: types.Model,
         initial_states: types.FloatArray,
         key: jax.random.KeyArray,
     ):
-        actor_critic_fn = partial(self.update_fn, sample)
+        actor_critic_fn = partial(self.update_fn, model.sample)
         results = actor_critic_fn(
             self.horizon,
             initial_states,

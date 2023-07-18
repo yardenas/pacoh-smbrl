@@ -243,10 +243,10 @@ class WorldModel(eqx.Module):
     def sample(
         self,
         horizon: int,
-        state: State,
+        state: State | jax.Array,
         key: jax.random.KeyArray,
         policy: Policy,
-    ) -> tuple[Prediction, State]:
+    ) -> Prediction:
         def f(carry, inputs):
             prev_state = carry
             if callable_policy:
@@ -267,14 +267,16 @@ class WorldModel(eqx.Module):
         else:
             callable_policy = True
             inputs = jax.random.split(key, horizon)
+        if isinstance(state, jax.Array):
+            state = State.from_flat(state, self.cell.stochastic_size)
         _, state = jax.lax.scan(
             f,
             state,
             inputs,
         )
         out = jax.vmap(self.decoder)(state.flatten())
-        next_obs, reward, cost = out[:, :-2], out[:, -2], out[:, -1]
-        out = Prediction(next_obs, reward, cost), state.flatten()
+        reward, cost = out[:, -2], out[:, -1]
+        out = Prediction(state.flatten(), reward, cost)
         return out
 
 
