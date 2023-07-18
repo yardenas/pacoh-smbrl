@@ -221,7 +221,7 @@ class WorldModel(eqx.Module):
             return state, (state, posterior, prior)
 
         keys = jax.random.split(key, obs_embeddings.shape[0])
-        _, (states, priors, posteriors) = jax.lax.scan(
+        _, (states, posteriors, priors) = jax.lax.scan(
             fn,
             init_state if init_state is not None else self.cell.init,
             (obs_embeddings, actions, keys),
@@ -255,10 +255,7 @@ class WorldModel(eqx.Module):
             else:
                 action, key = inputs
             state = self.cell.predict(prev_state, action, key)
-            out = self.decoder(state.flatten())
-            next_obs, reward, cost = out[:-2], out[-2], out[-1]
-            out = Prediction(next_obs, reward, cost), state.flatten()
-            return state, out
+            return state, state
 
         callable_policy = False
         if isinstance(policy, jax.Array):
@@ -270,11 +267,14 @@ class WorldModel(eqx.Module):
         else:
             callable_policy = True
             inputs = jax.random.split(key, horizon)
-        _, out = jax.lax.scan(
+        _, state = jax.lax.scan(
             f,
             state,
             inputs,
         )
+        out = jax.vmap(self.decoder)(state.flatten())
+        next_obs, reward, cost = out[:, :-2], out[:, -2], out[:, -1]
+        out = Prediction(next_obs, reward, cost), state.flatten()
         return out
 
 
@@ -290,8 +290,8 @@ def variational_step(
     free_nats: float = 0.0,
 ):
     def loss_fn(model):
-        infer_fn = eqx.filter_vmap(lambda f, a: infer(f, a, model, key))
-        states, y_hat, posteriors, priors = infer_fn(features, actions)
+        infer_fn = lambda features, actions: model(features, actions, key)
+        states, y_hat, posteriors, priors = eqx.filter_vmap(infer_fn)(features, actions)
         y = jnp.concatenate([features.observation, features.reward, features.cost], -1)
         reconstruction_loss = l2_loss(y_hat, y).mean()
         dynamics_kl_loss = kl_divergence(posteriors, priors, free_nats).mean()
@@ -306,15 +306,6 @@ def variational_step(
     (loss, rest), model_grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model)
     new_model, new_opt_state = learner.grad_step(model, model_grads, opt_state)
     return (new_model, new_opt_state), (loss, rest)
-
-
-def infer(
-    features: Features, actions: jax.Array, model: WorldModel, key: jax.random.KeyArray
-):
-    infer_fn = lambda features, actions: model(features, actions, key)
-    outs = eqx.filter_vmap(infer_fn)(features, actions)
-    states, outs, posteriors, priors = outs
-    return states, outs, posteriors, priors
 
 
 def kl_divergence(

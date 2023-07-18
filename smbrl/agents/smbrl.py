@@ -141,10 +141,10 @@ class SMBRL(AgentBase):
                 self.logger[k] = v
 
     def update_model(self, batch: TrajectoryData) -> jax.Array:
-        features = prepare_features(batch)
+        features, actions = prepare_features(batch)
         (self.model, self.model_learner.state), (loss, rest) = rssm.variational_step(
             features,
-            batch.action,
+            actions,
             self.model,
             self.model_learner,
             self.model_learner.state,
@@ -160,7 +160,7 @@ class SMBRL(AgentBase):
         return rest["states"].flatten()
 
 
-def prepare_features(batch: TrajectoryData) -> rssm.Features:
+def prepare_features(batch: TrajectoryData) -> tuple[rssm.Features, FloatArray]:
     reward = batch.reward[..., None]
     terminals = jnp.zeros_like(reward)
     dones = jnp.zeros_like(reward)
@@ -172,7 +172,9 @@ def prepare_features(batch: TrajectoryData) -> rssm.Features:
         jnp.asarray(terminals),
         jnp.asarray(dones),
     )
-    return features
+    flat = lambda x: x.reshape(-1, *x.shape[2:])
+    features = jax.tree_map(flat, features)
+    return features, flat(batch.action)
 
 
 def flatten_states(sample_fn, stochastic_size):
