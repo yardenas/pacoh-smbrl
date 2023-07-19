@@ -38,14 +38,14 @@ def cfg():
                 "agent.update_steps=1",
                 "agent.replay_buffer.sequence_length=16",
                 "agent.replay_buffer.num_shots=1",
-                "environment=cartpole_swingup",
+                "environment=rwrl_cartpole",
             ],
         )
         return cfg
 
 
 def test_min_max(cfg):
-    cfg.environment.cartpole.perturb_spec = PERTURB
+    cfg.environment.rwrl_cartpole.perturb_spec = PERTURB
     _, task_sampler = tasks.make(cfg)
     params = [params for params in task_sampler(1000)]
     min_, max_ = min(params), max(params)
@@ -57,7 +57,7 @@ def test_min_max(cfg):
 def test_same_params(cfg):
     n_tasks = 10
     cfg.training.num_tasks = n_tasks
-    cfg.environment.cartpole.perturb_spec = PERTURB
+    cfg.environment.rwrl_cartpole.perturb_spec = PERTURB
     _, task_sampler = tasks.make(cfg)
     params_a = [p for p in task_sampler(n_tasks)]
     params_b = [p for p in task_sampler(n_tasks)]
@@ -66,7 +66,7 @@ def test_same_params(cfg):
 
 def test_different_params(cfg):
     n_tasks = 10
-    cfg.environment.cartpole.perturb_spec = PERTURB
+    cfg.environment.rwrl_cartpole.perturb_spec = PERTURB
     _, task_sampler = tasks.make(cfg)
     params_a = [p for p in task_sampler(n_tasks)]
     params_b = [p for p in task_sampler(n_tasks)]
@@ -78,7 +78,7 @@ def test_different_params(cfg):
 def test_not_all_ones(cfg):
     n_tasks = 10
     cfg.training.num_tasks = n_tasks
-    cfg.environment.cartpole.perturb_spec = PERTURB
+    cfg.environment.rwrl_cartpole.perturb_spec = PERTURB
     _, task_sampler = tasks.make(cfg)
     params_a = [p for p in task_sampler(n_tasks)]
     params_b = [1] * n_tasks
@@ -88,7 +88,7 @@ def test_not_all_ones(cfg):
 
 
 def test_no_pertubations(cfg):
-    cfg.environment.cartpole.perturb_spec = NO_PERTURB
+    cfg.environment.rwrl_cartpole.perturb_spec = NO_PERTURB
     _, task_sampler = tasks.make(cfg)
     params_a = [p for p in task_sampler(5)]
     assert all(p is None for p in params_a)
@@ -106,12 +106,13 @@ def test_basic_ops(cfg):
         if truncated:
             assert not terminal
             break
+        assert count < cfg.training.time_limit
     _ = env.reset()
     assert count == cfg.training.time_limit
 
 
 def test_external_perturb(cfg):
-    cfg.environment.cartpole.perturb_spec = PERTURB
+    cfg.environment.rwrl_cartpole.perturb_spec = PERTURB
     make_env, task_sampler = tasks.make(cfg)
     env = make_env()
     param = next(task_sampler(1))

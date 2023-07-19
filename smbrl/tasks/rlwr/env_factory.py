@@ -109,6 +109,8 @@ def make_env_factory(cfg):
         from smbrl.wrappers import MetaEnv
 
         domain_name, task_cfg = list(cfg.environment.items())[0]
+        if domain_name.startswith("rwrl"):
+            domain_name = domain_name.replace("rwrl_", "")
         # Pertubation parameters are sampled via the `generate_parameter` function,
         # and are applied from within the alter_task function.
         env = RWRLWrapper(
