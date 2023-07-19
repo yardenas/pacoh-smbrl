@@ -5,7 +5,8 @@ replay_buffer:
   num_shots: 4
   capacity: 1000
 model:
-  n_layers: 2
+  stochastic_size: 64
+  deterministic_size: 128
   hidden_size: 128
 actor:
   n_layers: 2
@@ -30,3 +31,6 @@ discount: 0.99
 lambda_: 0.97
 plan_horizon: 15
 update_steps: 100
+beta: 0.1
+free_nats: 3.
+

@@ -200,7 +200,7 @@ class WorldModel(eqx.Module):
         self.encoder = eqx.nn.Linear(state_dim, hidden_size, key=encoder_key)
         # 1 + 1 = cost + reward
         self.decoder = eqx.nn.Linear(
-            hidden_size + stochastic_size, state_dim + 1 + 1, key=decoder_key
+            deterministic_size + stochastic_size, state_dim + 1 + 1, key=decoder_key
         )
 
     def __call__(

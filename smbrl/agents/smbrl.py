@@ -75,11 +75,11 @@ class SMBRL(AgentBase):
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
             key=next(self.prng),
-            **dict(stochastic_size=64, deterministic_size=256, hidden_size=256),
+            **config.agent.model,
         )
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
         self.actor_critic = ModelBasedActorCritic(
-            64 + 256,
+            config.agent.model.stochastic_size + config.agent.model.deterministic_size,
             np.prod(action_space.shape),
             config.agent.actor,
             config.agent.critic,
@@ -147,8 +147,8 @@ class SMBRL(AgentBase):
             self.model_learner,
             self.model_learner.state,
             next(self.prng),
-            0.1,
-            3.0,
+            self.config.agent.beta,
+            self.config.agent.free_nats,
         )
         self.logger["agent/model/loss"] = float(loss.mean())
         self.logger["agent/model/reconstruction"] = float(
