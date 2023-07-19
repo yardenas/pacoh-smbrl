@@ -1,4 +1,4 @@
-cartpole:
+rwrl_cartpole:
   task: realworld_swingup
   safety_spec:
     enable: True
