@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 Data = tuple[jax.Array, jax.Array]
 
-FloatArray = npt.NDArray[Union[np.float32, np.float64]]
+FloatArray = Union[npt.NDArray[Union[np.float32, np.float64]], jax.Array]
 
 TaskSampler = Callable[[int, Optional[bool]], Iterable[Any]]
 
