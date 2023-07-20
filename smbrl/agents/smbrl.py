@@ -104,7 +104,7 @@ class SMBRL(AgentBase):
         self,
         observation: FloatArray,
     ) -> FloatArray:
-        if not self.replay_buffer.empty and self.should_train:
+        if not self.replay_buffer.empty and self.should_train():
             self.update()
         normalized_obs = normalize(
             observation,

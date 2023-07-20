@@ -105,7 +105,7 @@ class ModelBasedActorCritic:
     def update(
         self,
         model: types.Model,
-        initial_states: types.FloatArray,
+        initial_states: types.FloatArray | jax.Array,
         key: jax.random.KeyArray,
     ) -> dict[str, float]:
         actor_critic_fn = partial(self.update_fn, model.sample)
