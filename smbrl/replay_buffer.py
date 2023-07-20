@@ -101,14 +101,9 @@ class ReplayBuffer:
     def _sample_batch(
         self, batch_size: int, sequence_length: int, num_shots: int, strict=True
     ) -> Iterator[tuple[Any, ...]]:
-        capacity, num_episodes, time_limit = self.observation.shape[0:3]
+        num_episodes, time_limit = self.observation.shape[1:3]
         if strict:
-            if self.task_count <= capacity:
-                # Finds first occurence of episodes with episode_id == 0.
-                # See documentation of np.argmax(). Use only one task if buffer is empty.
-                valid_tasks = max((self.episode_ids == 0).argmax(), 1)
-            else:
-                valid_tasks = capacity
+            valid_tasks = self.valid_tasks
         else:
             valid_tasks = self.observation.shape[0]
         assert time_limit > sequence_length and num_episodes >= num_shots
@@ -121,6 +116,7 @@ class ReplayBuffer:
                 (0, 1),
             )
             task_ids = self.rs.choice(valid_tasks, size=batch_size)
+            # Add 1 for randint's open endedness on the right side.
             highs = (
                 self.episode_ids[task_ids]
                 if strict
@@ -159,7 +155,18 @@ class ReplayBuffer:
 
     @property
     def empty(self):
-        return self.valid_tasks == 0
+        return self.valid_tasks <= 1
+
+    @property
+    def valid_tasks(self):
+        capacity = self.observation.shape[0]
+        if self.task_count <= capacity:
+            # Finds first occurence of episodes with episode_id == 0.
+            # See documentation of np.argmax(). Use only one task if buffer is empty.
+            valid_tasks = max((self.episode_ids == 0).argmax(), 1)
+        else:
+            valid_tasks = capacity
+        return valid_tasks
 
 
 def _make_ids(rs, low, n_samples, batch_size, dim):

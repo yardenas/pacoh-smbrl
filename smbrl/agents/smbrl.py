@@ -1,3 +1,4 @@
+from math import ceil
 from typing import NamedTuple
 
 import equinox as eqx
@@ -15,7 +16,7 @@ from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import FloatArray
-from smbrl.utils import Learner, add_to_buffer, normalize
+from smbrl.utils import Count, Learner, add_to_buffer, normalize
 
 
 class AgentState(NamedTuple):
@@ -93,11 +94,18 @@ class SMBRL(AgentBase):
         self.state = AgentState.init(
             config.training.parallel_envs, self.model.cell, np.prod(action_space.shape)
         )
+        steps_per_iteration = (
+            config.training.time_limit // config.training.action_repeat
+        )
+        retrain_every = ceil(steps_per_iteration / config.agent.update_steps)
+        self.should_train = Count(retrain_every)
 
     def __call__(
         self,
         observation: FloatArray,
     ) -> FloatArray:
+        if not self.replay_buffer.empty and self.should_train:
+            self.update()
         normalized_obs = normalize(
             observation,
             self.obs_normalizer.result.mean,
@@ -126,10 +134,9 @@ class SMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        self.update()
 
     def update(self) -> None:
-        for batch in self.replay_buffer.sample(self.config.agent.update_steps):
+        for batch in self.replay_buffer.sample(1):
             inferrered_rssm_states = self.update_model(batch)
             initial_states = inferrered_rssm_states.reshape(
                 -1, inferrered_rssm_states.shape[-1]
