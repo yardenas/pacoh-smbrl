@@ -27,7 +27,7 @@ training:
   eval_episodes_per_task: 10
   adaptation_budget: 1
   epochs: 200
-  eval_every: 100
+  eval_every: 5
   action_repeat: 1
   render_episodes: 1
   precision: 32
