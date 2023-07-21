@@ -70,8 +70,9 @@ class SMBRL(AgentBase):
     def __call__(
         self,
         observation: FloatArray,
+        train: bool = False,
     ) -> FloatArray:
-        if not self.replay_buffer.empty and self.should_train():
+        if train and not self.replay_buffer.empty and self.should_train():
             self.update()
         normalized_obs = normalize(
             observation,

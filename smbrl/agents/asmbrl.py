@@ -141,6 +141,7 @@ class ASMBRL(AgentBase):
     def __call__(
         self,
         observation: FloatArray,
+        train: bool = False,
     ) -> FloatArray:
         normalized_obs = normalize(
             observation,
