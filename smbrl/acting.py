@@ -48,15 +48,11 @@ def interact(
             render = episode_count >= adaptation_episodes - 1 and render_episodes
             if render:
                 trajectory.frames.append(environment.render())
-            actions = agent(observations)
+            actions = agent(observations, train)
             next_observations, rewards, done, infos = environment.step(actions)
             costs = np.array([info.get("cost", 0) for info in infos])
             transition = Transition(
-                observations,
-                next_observations,
-                actions,
-                rewards,
-                costs,
+                observations, next_observations, actions, rewards, costs
             )
             trajectory.transitions.append(transition)
             observations = next_observations
