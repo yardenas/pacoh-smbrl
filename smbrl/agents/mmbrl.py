@@ -16,7 +16,7 @@ from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import FloatArray, Prediction
-from smbrl.utils import Learner, add_to_buffer, normalize
+from smbrl.utils import Count, Learner, add_to_buffer, normalize
 
 
 def actor_critic_factory(observation_space, action_space, config, key, belief):
@@ -104,12 +104,15 @@ class MMBRL(AgentBase):
             next(self.prng),
             self.context_belief,
         )
+        self.should_train = Count(config.agent.train_every)
 
     def __call__(
         self,
         observation: FloatArray,
         train: bool = False,
     ) -> FloatArray:
+        if train and not self.replay_buffer.empty and self.should_train():
+            self.update()
         normalized_obs = normalize(
             observation,
             self.obs_normalizer.result.mean,
@@ -136,7 +139,6 @@ class MMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        self.update()
 
     def adapt(self, trajectory: TrajectoryData) -> None:
         if not self.contextual:

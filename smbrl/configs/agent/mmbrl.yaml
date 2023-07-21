@@ -34,6 +34,7 @@ model_optimizer:
 discount: 0.99
 lambda_: 0.97
 plan_horizon: 15
-update_steps: 100
+update_steps: 2
+train_every: 1
 kl_scale: 1e-4
 free_nats: 0.01
