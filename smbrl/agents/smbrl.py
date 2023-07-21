@@ -1,4 +1,3 @@
-from math import ceil
 from typing import NamedTuple
 
 import equinox as eqx
@@ -94,11 +93,7 @@ class SMBRL(AgentBase):
         self.state = AgentState.init(
             config.training.parallel_envs, self.model.cell, np.prod(action_space.shape)
         )
-        steps_per_iteration = (
-            config.training.time_limit // config.training.action_repeat
-        )
-        retrain_every = ceil(steps_per_iteration / config.agent.update_steps)
-        self.should_train = Count(retrain_every)
+        self.should_train = Count(config.agent.train_every)
 
     def __call__(
         self,
@@ -136,7 +131,7 @@ class SMBRL(AgentBase):
         )
 
     def update(self) -> None:
-        for batch in self.replay_buffer.sample(1):
+        for batch in self.replay_buffer.sample(self.config.agent.update_steps):
             inferrered_rssm_states = self.update_model(batch)
             initial_states = inferrered_rssm_states.reshape(
                 -1, inferrered_rssm_states.shape[-1]
