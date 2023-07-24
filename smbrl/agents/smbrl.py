@@ -132,7 +132,8 @@ class SMBRL(AgentBase):
         )
 
     def update(self) -> None:
-        for batch in self.replay_buffer.sample(self.config.agent.update_steps):
+        for _ in range(self.config.agent.update_steps):
+            batch = self.replay_buffer.sample()
             inferrered_rssm_states = self.update_model(batch)
             initial_states = inferrered_rssm_states.reshape(
                 -1, inferrered_rssm_states.shape[-1]
