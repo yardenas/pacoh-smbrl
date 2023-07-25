@@ -40,19 +40,19 @@ class ContinuousActor(eqx.Module):
 
     def act(
         self,
-        state: Any,
+        observation: Any,
         key: Optional[jax.random.KeyArray] = None,
         deterministic: bool = False,
     ) -> jax.Array:
         if deterministic:
-            samples, log_probs = self(state).sample_and_log_prob(
+            samples, log_probs = self(observation).sample_and_log_prob(
                 seed=jax.random.PRNGKey(0), sample_shape=100
             )
             most_likely = jnp.argmax(log_probs)
             return samples[most_likely]
         else:
             assert key is not None
-            return self(state).sample(seed=key)
+            return self(observation).sample(seed=key)
 
 
 class Critic(eqx.Module):
@@ -68,8 +68,8 @@ class Critic(eqx.Module):
     ):
         self.net = eqx.nn.MLP(state_dim, 1, hidden_size, n_layers, key=key)
 
-    def __call__(self, state: Any) -> jax.Array:
-        x = self.net(state)
+    def __call__(self, observation: Any) -> jax.Array:
+        x = self.net(observation)
         return x.squeeze(-1)
 
 
@@ -105,7 +105,7 @@ class ModelBasedActorCritic:
     def update(
         self,
         model: types.Model,
-        initial_states: types.FloatArray | jax.Array,
+        initial_states: jax.Array,
         key: jax.random.KeyArray,
     ) -> dict[str, float]:
         actor_critic_fn = partial(self.update_fn, model.sample)

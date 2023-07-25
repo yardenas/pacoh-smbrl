@@ -300,6 +300,8 @@ def variational_step(
             reconstruction_loss=reconstruction_loss,
             context_kl_loss=context_kl_loss,
             transition_kl_loss=transition_kl_loss,
+            states=outs.states,
+            context_posterior=outs.context_posterior,
         )
         return (
             reconstruction_loss

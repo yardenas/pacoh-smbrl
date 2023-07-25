@@ -9,50 +9,28 @@ from omegaconf import DictConfig
 
 from smbrl import metrics as m
 from smbrl.agents import maki
-from smbrl.agents.actor_critic import ModelBasedActorCritic
 from smbrl.agents.base import AgentBase
 from smbrl.agents.contextual_actor_critic import ContextualModelBasedActorCritic
+from smbrl.agents.smbrl import AgentState
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
 from smbrl.types import FloatArray, Prediction
-from smbrl.utils import Learner, add_to_buffer, normalize
-
-
-def actor_critic_factory(observation_space, action_space, config, key, belief):
-    if config.agent.model.context_size == 0:
-        return ModelBasedActorCritic(
-            np.prod(observation_space.shape),
-            np.prod(action_space.shape),
-            config.agent.actor,
-            config.agent.critic,
-            config.agent.actor_optimizer,
-            config.agent.critic_optimizer,
-            config.agent.plan_horizon,
-            config.agent.discount,
-            config.agent.lambda_,
-            key,
-        )
-    else:
-        return ContextualModelBasedActorCritic(
-            np.prod(observation_space.shape),
-            np.prod(action_space.shape),
-            config.agent.actor,
-            config.agent.critic,
-            config.agent.actor_optimizer,
-            config.agent.critic_optimizer,
-            config.agent.plan_horizon,
-            config.agent.discount,
-            config.agent.lambda_,
-            key,
-            belief,
-        )
+from smbrl.utils import Count, Learner, add_to_buffer, normalize
 
 
 @eqx.filter_jit
-def policy(actor, observation, key):
-    return jax.vmap(lambda o, k: actor.act(o, k))(
-        observation, jax.random.split(key, observation.state.shape[0])
+def policy(actor, model, prev_state, belief, observation, key):
+    def per_env_policy(prev_state, observation, key):
+        model_key, policy_key = jax.random.split(key)
+        current_rssm_state = model.step(
+            prev_state.rssm_state, observation, prev_state.prev_action, model_key
+        )
+        action = actor.act(maki.BeliefAndState(belief, current_rssm_state), policy_key)
+        return action, AgentState(current_rssm_state, action)
+
+    return jax.vmap(per_env_policy)(
+        prev_state, observation, jax.random.split(key, observation.shape[0])
     )
 
 
@@ -97,30 +75,45 @@ class MMBRL(AgentBase):
         )
         self.context_belief = maki.ShiftScale(belief, jnp.ones_like(belief))
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
-        self.actor_critic = actor_critic_factory(
-            observation_space,
-            action_space,
-            config,
+        self.actor_critic = ContextualModelBasedActorCritic(
+            np.prod(observation_space.shape),
+            np.prod(action_space.shape),
+            config.agent.actor,
+            config.agent.critic,
+            config.agent.actor_optimizer,
+            config.agent.critic_optimizer,
+            config.agent.plan_horizon,
+            config.agent.discount,
+            config.agent.lambda_,
             next(self.prng),
             self.context_belief,
         )
+        self.state = AgentState.init(
+            config.training.parallel_envs, self.model.cell, np.prod(action_space.shape)
+        )
+        self.should_train = Count(config.agent.train_every)
 
     def __call__(
         self,
         observation: FloatArray,
         train: bool = False,
     ) -> FloatArray:
+        if train and not self.replay_buffer.empty and self.should_train():
+            self.update()
         normalized_obs = normalize(
             observation,
             self.obs_normalizer.result.mean,
             self.obs_normalizer.result.std,
         )
-        if self.contextual:
-            state = maki.BeliefAndState(self.context_belief, normalized_obs)
-        else:
-            state = normalized_obs
-        action = policy(self.actor_critic.actor, state, next(self.prng))
-        return np.asarray(action)
+        actions, self.state = policy(
+            self.actor_critic.actor,
+            self.model,
+            self.state,
+            self.context_belief,
+            normalized_obs,
+            next(self.prng),
+        )
+        return np.asarray(actions)
 
     def observe(self, trajectory: TrajectoryData) -> None:
         self.obs_normalizer.update_state(
@@ -136,11 +129,9 @@ class MMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
-        self.update()
+        self.state = jax.tree_map(lambda x: jnp.zeros_like(x), self.state)
 
     def adapt(self, trajectory: TrajectoryData) -> None:
-        if not self.contextual:
-            return
         add_to_buffer(
             self.adaptation_buffer,
             trajectory,
@@ -150,18 +141,16 @@ class MMBRL(AgentBase):
         trajectories = self.adaptation_buffer.get()
         self.context_belief = infer_context(trajectories, self.model)
         evaluate_model(self.model, trajectories, self.context_belief)
-        # TODO (yarden): can take gradient steps on the policy as well
-        #  (and basically specialize it to the test tasks).
 
     def update(self) -> None:
         for _ in range(self.config.agent.update_steps):
             batch = self.replay_buffer.sample()
-            context_posterior = self.update_model(batch)
+            states, context_posterior = self.update_model(batch)
             context_posterior, initial_states = prepare_actor_critic_batch(
                 context_posterior, batch.observation
             )
-            if self.contextual:
-                self.actor_critic.contextualize(context_posterior)
+            initial_states = states.reshape(-1, states.shape[-1])
+            self.actor_critic.contextualize(context_posterior)
             outs = self.actor_critic.update(
                 self.model,
                 initial_states,
@@ -170,7 +159,7 @@ class MMBRL(AgentBase):
             for k, v in outs.items():
                 self.logger[k] = v
 
-    def update_model(self, batch: TrajectoryData) -> maki.ShiftScale:
+    def update_model(self, batch: TrajectoryData) -> tuple[jax.Array, maki.ShiftScale]:
         features = prepare_features(batch)
         (self.model, self.model_learner.state), (loss, rest) = maki.variational_step(
             features,
@@ -188,7 +177,7 @@ class MMBRL(AgentBase):
             rest["reconstruction_loss"].mean()
         )
         self.logger["agent/model/kl"] = float(rest["kl_loss"].mean())
-        return rest["posterior"]
+        return rest["states"].flatten(), rest["context_posterior"]
 
     def reset(self):
         self.context_belief = maki.ShiftScale(
@@ -196,10 +185,6 @@ class MMBRL(AgentBase):
             jnp.ones_like(self.context_belief.scale),
         )
         self.adaptation_buffer.reset()
-
-    @property
-    def contextual(self):
-        return self.config.agent.model.context_size > 0
 
 
 @eqx.filter_jit

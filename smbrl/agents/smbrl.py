@@ -130,6 +130,7 @@ class SMBRL(AgentBase):
             self.obs_normalizer,
             self.config.training.scale_reward,
         )
+        self.state = jax.tree_map(lambda x: jnp.zeros_like(x), self.state)
 
     def update(self) -> None:
         for _ in range(self.config.agent.update_steps):
