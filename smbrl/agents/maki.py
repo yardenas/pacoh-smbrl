@@ -7,18 +7,18 @@ import jax.nn as jnn
 import jax.numpy as jnp
 from optax import OptState, l2_loss
 
-from smbrl.agents import rssm
+from smbrl.agents.rssm import Features, ShiftScale, State, WorldModel, kl_divergence
 from smbrl.types import Policy, Prediction
 from smbrl.utils import Learner
 
 
 class BeliefAndState(NamedTuple):
-    belief: rssm.ShiftScale
-    state: rssm.State
+    belief: ShiftScale
+    state: State
 
 
-def contextualize_state(state: rssm.State, context: jax.Array) -> rssm.State:
-    return rssm.State(
+def contextualize_state(state: State, context: jax.Array) -> State:
+    return State(
         state.stochastic,
         jnp.concatenate([state.deterministic, context], axis=-1),
     )
@@ -141,7 +141,7 @@ class DomainContext(eqx.Module):
         ]
         self.decoder = eqx.nn.Linear(hidden_size, context_size * 2, key=decoder_key)
 
-    def __call__(self, features: rssm.Features, actions: jax.Array) -> rssm.ShiftScale:
+    def __call__(self, features: Features, actions: jax.Array) -> ShiftScale:
         x = jnp.concatenate([features.flatten(), actions], -1)
         x = x.reshape(-1, *x.shape[2:])
         x = jax.vmap(self.encoder)(x)
@@ -154,12 +154,12 @@ class DomainContext(eqx.Module):
         # TODO (yarden): maybe constrain the stddev like here:
         # https://arxiv.org/pdf/1901.05761.pdf to enforce the size of it.
         stddev = jnn.softplus(stddev) + 0.001
-        return rssm.ShiftScale(mu, stddev)
+        return ShiftScale(mu, stddev)
 
 
 class ContextualWorldModel(eqx.Module):
     context: DomainContext
-    model: rssm.WorldModel
+    model: WorldModel
 
     def __init__(
         self,
@@ -186,7 +186,7 @@ class ContextualWorldModel(eqx.Module):
             context_size,
             key=context_key,
         )
-        self.model = rssm.WorldModel(
+        self.model = WorldModel(
             state_dim,
             action_dim,
             deterministic_size + context_size,
@@ -197,27 +197,25 @@ class ContextualWorldModel(eqx.Module):
 
     def __call__(
         self,
-        features: rssm.Features,
+        features: Features,
         actions: jax.Array,
         context: jax.Array,
         key: jax.random.KeyArray,
-    ) -> tuple[rssm.State, jax.Array, rssm.ShiftScale, rssm.ShiftScale]:
+    ) -> tuple[State, jax.Array, ShiftScale, ShiftScale]:
         init_state = contextualize_state(self.model.cell.init, context)
         return self.model(features, actions, key, init_state)
 
-    def infer_context(
-        self, features: rssm.Features, actions: jax.Array
-    ) -> rssm.ShiftScale:
+    def infer_context(self, features: Features, actions: jax.Array) -> ShiftScale:
         return self.context(features, actions)
 
     def step(
         self,
-        state: rssm.State,
+        state: State,
         observation: jax.Array,
         action: jax.Array,
         context: jax.Array,
         key: jax.random.KeyArray,
-    ) -> rssm.State:
+    ) -> State:
         state = contextualize_state(state, context)
         return self.model.step(state, observation, action, key)
 
@@ -227,7 +225,7 @@ class ContextualWorldModel(eqx.Module):
         initial_state: jax.Array,
         key: jax.random.KeyArray,
         policy: Policy,
-        context_belief: rssm.ShiftScale,
+        context_belief: ShiftScale,
     ) -> Prediction:
         def f(carry, x):
             prev_state = carry
@@ -251,7 +249,7 @@ class ContextualWorldModel(eqx.Module):
         else:
             callable_policy = True
             inputs = jax.random.split(key, horizon)
-        from_flat_init_state = rssm.State.from_flat(
+        from_flat_init_state = State.from_flat(
             initial_state, self.model.cell.stochastic_size
         )
         init = contextualize_state(from_flat_init_state, context_belief.shift)
@@ -260,7 +258,19 @@ class ContextualWorldModel(eqx.Module):
             init,
             inputs,
         )
-        return out  # type: ignore
+        out = jax.vmap(self.decoder)(state.flatten())
+        reward, cost = out[:, -2], out[:, -1]
+        out = Prediction(state.flatten(), reward, cost)
+        return out
+
+
+class InferenceOutputs(NamedTuple):
+    states: State
+    flat_preds: jax.Array
+    posterior: ShiftScale
+    prior: ShiftScale
+    context_posterior: ShiftScale
+    context_prior: ShiftScale
 
 
 @eqx.filter_jit
@@ -279,18 +289,24 @@ def variational_step(
 ):
     def loss_fn(model):
         infer_fn = eqx.filter_vmap(lambda f, a: infer(f, a, model, key))
-        y_hat, context_posterior, context_prior = infer_fn(features, actions)
+        outs = infer_fn(features, actions)
         y = jnp.concatenate([next_states, features.reward], -1)
-        reconstruction_loss = l2_loss(y_hat, y).mean()
-        kl_loss = rssm.kl_divergence(
-            context_posterior, context_prior, context_free_nats
+        reconstruction_loss = l2_loss(outs.flat_preds, y).mean()
+        context_kl_loss = kl_divergence(
+            outs.context_posterior, outs.context_prior, free_nats_context
         ).mean()
+        transition_kl_loss = kl_divergence(outs.posterior, outs.prior, free_nats_model)
         extra = dict(
             reconstruction_loss=reconstruction_loss,
-            kl_loss=kl_loss,
-            posterior=context_posterior,
+            context_kl_loss=context_kl_loss,
+            transition_kl_loss=transition_kl_loss,
         )
-        return reconstruction_loss + beta * kl_loss, extra
+        return (
+            reconstruction_loss
+            + beta_context * context_kl_loss
+            + beta_model * transition_kl_loss,
+            extra,
+        )
 
     (loss, rest), model_grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model)
     new_model, new_opt_state = learner.grad_step(model, model_grads, opt_state)
@@ -298,13 +314,13 @@ def variational_step(
 
 
 def infer(
-    features: rssm.Features,
+    features: Features,
     actions: jax.Array,
     model: ContextualWorldModel,
     key: jax.random.KeyArray,
-):
+) -> InferenceOutputs:
     context_posterior = model.infer_context(features, actions)
-    context_prior = rssm.ShiftScale(
+    context_prior = ShiftScale(
         jnp.zeros_like(context_posterior.shift), jnp.ones_like(context_posterior.scale)
     )
     context_key, transition_key = jax.random.split(key)
@@ -312,5 +328,7 @@ def infer(
     pred_fn = lambda features, actions: model(
         features.observation, actions, context, transition_key
     )
-    outs = eqx.filter_vmap(pred_fn)(features, actions)
-    return outs, context_posterior, context_prior
+    state, flat_preds, posterior, prior = eqx.filter_vmap(pred_fn)(features, actions)
+    return InferenceOutputs(
+        state, flat_preds, posterior, prior, context_posterior, context_prior
+    )

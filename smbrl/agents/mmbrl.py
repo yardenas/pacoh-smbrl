@@ -80,16 +80,16 @@ class MMBRL(AgentBase):
             num_episodes=config.training.episodes_per_task,
         )
         self.adaptation_buffer = TrajectoryBuffer()
-        self.model = maki.WorldModel(
+        self.model = maki.ContextualWorldModel(
             state_dim=np.prod(observation_space.shape),
             action_dim=np.prod(action_space.shape),
-            num_dynamics_layers=config.agent.model.num_dynamics_layers,
-            dynamics_size=config.agent.model.dynamics_size,
             num_context_layers=config.agent.model.num_context_layers,
             hidden_size=config.agent.model.hidden_size,
             intermediate_size=config.agent.model.intermediate_size,
             num_heads=config.agent.model.num_heads,
             context_size=config.agent.model.context_size,
+            deterministic_size=config.agent.model.deterministic_size,
+            stochastic_size=config.agent.model.stochastic_size,
             key=next(self.prng),
         )
         belief = jnp.zeros(
