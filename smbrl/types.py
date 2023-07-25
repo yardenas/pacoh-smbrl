@@ -36,9 +36,7 @@ ModelUpdate = tuple[tuple[PyTree, optax.OptState], jax.Array]
 
 
 class Model(Protocol):
-    def __call__(
-        self, x: jax.Array, train: bool = False
-    ) -> tuple[jax.Array, jax.Array]:
+    def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         ...
 
     def step(self, state: jax.Array, action: jax.Array) -> "Prediction":

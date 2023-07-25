@@ -7,177 +7,21 @@ import jax.nn as jnn
 import jax.numpy as jnp
 from optax import OptState, l2_loss
 
-from smbrl.agents.models import FeedForwardModel
+from smbrl.agents import rssm
 from smbrl.types import Policy, Prediction
-from smbrl.utils import Learner, contextualize
-
-
-class Features(NamedTuple):
-    observation: jax.Array
-    reward: jax.Array
-    cost: jax.Array
-    terminal: jax.Array
-    done: jax.Array
-
-    def flatten(self):
-        return jnp.concatenate(
-            [self.observation, self.reward, self.cost, self.terminal, self.done],
-            axis=-1,
-        )
-
-
-class ShiftScale(NamedTuple):
-    shift: jax.Array
-    scale: jax.Array
-
-
-class State(NamedTuple):
-    stochastic: jax.Array
-    deterministic: jax.Array
-
-    def flatten(self):
-        return jnp.concatenate([self.stochastic, self.deterministic], axis=-1)
+from smbrl.utils import Learner
 
 
 class BeliefAndState(NamedTuple):
-    belief: ShiftScale
-    state: State
+    belief: rssm.ShiftScale
+    state: rssm.State
 
 
-class Prior(eqx.Module):
-    cell: eqx.nn.GRUCell
-    encoder: eqx.nn.Linear
-    decoder1: eqx.nn.Linear
-    decoder2: eqx.nn.Linear
-
-    def __init__(
-        self,
-        deterministic_size: int,
-        stochastic_size: int,
-        hidden_size: int,
-        action_dim: int,
-        key: jax.random.KeyArray,
-    ):
-        encoder_key, cell_key, decoder1_key, decoder2_key = jax.random.split(key, 4)
-        self.encoder = eqx.nn.Linear(
-            stochastic_size + action_dim, deterministic_size, key=encoder_key
-        )
-        self.cell = eqx.nn.GRUCell(deterministic_size, deterministic_size, key=cell_key)
-        self.decoder1 = eqx.nn.Linear(deterministic_size, hidden_size, key=decoder1_key)
-        self.decoder2 = eqx.nn.Linear(
-            hidden_size, stochastic_size * 2, key=decoder2_key
-        )
-
-    def __call__(
-        self, prev_state: State, action: jax.Array
-    ) -> tuple[dtx.Normal, jax.Array]:
-        x = jnp.concatenate([prev_state.stochastic, action], -1)
-        x = jnn.elu(self.encoder(x))
-        hidden = self.cell(x, prev_state.deterministic)
-        x = jnn.elu(self.decoder1(hidden))
-        x = self.decoder2(x)
-        mu, stddev = jnp.split(x, 2, -1)
-        stddev = jnn.softplus(stddev) + 0.1
-        return ShiftScale(mu, stddev), hidden
-
-
-class Posterior(eqx.Module):
-    encoder: eqx.nn.Linear
-    decoder: eqx.nn.Linear
-
-    def __init__(
-        self,
-        deterministic_size: int,
-        stochastic_size: int,
-        hidden_size: int,
-        embedding_size: int,
-        key: jax.random.KeyArray,
-    ):
-        encoder_key, decoder_key = jax.random.split(key)
-        self.encoder = eqx.nn.Linear(
-            deterministic_size + embedding_size, hidden_size, key=encoder_key
-        )
-        self.decoder = eqx.nn.Linear(hidden_size, stochastic_size * 2, key=decoder_key)
-
-    def __call__(self, prev_state: State, embedding: jax.Array):
-        x = jnp.concatenate([prev_state.deterministic, embedding], -1)
-        x = jnn.elu(self.encoder(x))
-        x = self.decoder(x)
-        mu, stddev = jnp.split(x, 2, -1)
-        stddev = jnn.softplus(stddev) + 0.1
-        return ShiftScale(mu, stddev)
-
-
-class RSSM(eqx.Module):
-    prior: Prior
-    posterior: Posterior
-    deterministic_size: int
-    stochastic_size: int
-
-    def __init__(
-        self,
-        deterministic_size: int,
-        stochastic_size: int,
-        hidden_size: int,
-        embedding_size: int,
-        action_dim: int,
-        context_dim: int,
-        key: jax.random.KeyArray,
-    ):
-        prior_key, posterior_key = jax.random.split(key)
-        self.prior = Prior(
-            deterministic_size,
-            stochastic_size,
-            hidden_size,
-            action_dim + context_dim,
-            prior_key,
-        )
-        self.posterior = Posterior(
-            deterministic_size,
-            stochastic_size,
-            hidden_size,
-            embedding_size,
-            posterior_key,
-        )
-        self.deterministic_size = deterministic_size
-        self.stochastic_size = stochastic_size
-
-    def predict(
-        self,
-        prev_state: State,
-        action: jax.Array,
-        key: jax.random.KeyArray,
-        context: Optional[jax.Array] = None,
-    ) -> State:
-        if context is None:
-            context = jnp.zeros_like(action[..., :-1])
-        action = jnp.concatenate([action, context], -1)
-        prior, deterministic = self.prior(prev_state, action)
-        stochastic = dtx.Normal(*prior).sample(seed=key)
-        return State(stochastic, deterministic)
-
-    def filter(
-        self,
-        prev_state: State,
-        embeddings: jax.Array,
-        action: jax.Array,
-        key: jax.random.KeyArray,
-        context: Optional[jax.Array],
-    ) -> tuple[State, ShiftScale, ShiftScale]:
-        if context is None:
-            context = jnp.zeros_like(action[..., :-1])
-        action = jnp.concatenate([action, context], -1)
-        prior, deterministic = self.prior(prev_state, action)
-        state = State(prev_state.stochastic, deterministic)
-        posterior = self.posterior(state, embeddings)
-        stochastic = dtx.Normal(*posterior).sample(seed=key)
-        return State(stochastic, deterministic), prior, posterior
-
-    @property
-    def init(self) -> State:
-        return State(
-            jnp.zeros(self.stochastic_size), jnp.zeros(self.deterministic_size)
-        )
+def contextualize_state(state: rssm.State, context: jax.Array) -> rssm.State:
+    return rssm.State(
+        state.stochastic,
+        jnp.concatenate([state.deterministic, context], axis=-1),
+    )
 
 
 class FeedForwardBlock(eqx.Module):
@@ -297,7 +141,7 @@ class DomainContext(eqx.Module):
         ]
         self.decoder = eqx.nn.Linear(hidden_size, context_size * 2, key=decoder_key)
 
-    def __call__(self, features: Features, actions: jax.Array) -> ShiftScale:
+    def __call__(self, features: rssm.Features, actions: jax.Array) -> rssm.ShiftScale:
         x = jnp.concatenate([features.flatten(), actions], -1)
         x = x.reshape(-1, *x.shape[2:])
         x = jax.vmap(self.encoder)(x)
@@ -310,28 +154,28 @@ class DomainContext(eqx.Module):
         # TODO (yarden): maybe constrain the stddev like here:
         # https://arxiv.org/pdf/1901.05761.pdf to enforce the size of it.
         stddev = jnn.softplus(stddev) + 0.001
-        return ShiftScale(mu, stddev)
+        return rssm.ShiftScale(mu, stddev)
 
 
-class WorldModel(eqx.Module):
+class ContextualWorldModel(eqx.Module):
     context: DomainContext
-    dynamics: RSSM
+    model: rssm.WorldModel
 
     def __init__(
         self,
         state_dim: int,
         action_dim: int,
-        num_dynamics_layers: int,
-        dynamics_size: int,
         num_context_layers: int,
         hidden_size: int,
         intermediate_size: int,
         num_heads: int,
         context_size: int,
+        deterministic_size: int,
+        stochastic_size: int,
         *,
         key: jax.random.KeyArray,
     ):
-        context_key, encoder_key = jax.random.split(key, 2)
+        context_key, model_key = jax.random.split(key)
         aux_dim = 4  # terminal, done, cost, reward
         self.context = DomainContext(
             num_context_layers,
@@ -342,27 +186,40 @@ class WorldModel(eqx.Module):
             context_size,
             key=context_key,
         )
-        self.dynamics = FeedForwardModel(
-            num_dynamics_layers,
+        self.model = rssm.WorldModel(
             state_dim,
-            action_dim + context_size,
-            dynamics_size,
-            key=encoder_key,
+            action_dim,
+            deterministic_size + context_size,
+            stochastic_size,
+            hidden_size,
+            key=model_key,
         )
 
     def __call__(
         self,
-        state: jax.Array,
+        features: rssm.Features,
+        actions: jax.Array,
+        context: jax.Array,
+        key: jax.random.KeyArray,
+    ) -> tuple[rssm.State, jax.Array, rssm.ShiftScale, rssm.ShiftScale]:
+        init_state = contextualize_state(self.model.cell.init, context)
+        return self.model(features, actions, key, init_state)
+
+    def infer_context(
+        self, features: rssm.Features, actions: jax.Array
+    ) -> rssm.ShiftScale:
+        return self.context(features, actions)
+
+    def step(
+        self,
+        state: rssm.State,
+        observation: jax.Array,
         action: jax.Array,
         context: jax.Array,
-    ) -> jax.Array:
-        state = contextualize(state, context)
-        x = jnp.concatenate([state, action], -1)
-        outs = self.dynamics(x)
-        return outs.mean
-
-    def infer_context(self, features: Features, actions: jax.Array) -> ShiftScale:
-        return self.context(features, actions)
+        key: jax.random.KeyArray,
+    ) -> rssm.State:
+        state = contextualize_state(state, context)
+        return self.model.step(state, observation, action, key)
 
     def sample(
         self,
@@ -370,24 +227,20 @@ class WorldModel(eqx.Module):
         initial_state: jax.Array,
         key: jax.random.KeyArray,
         policy: Policy,
-        context_belief: ShiftScale,
+        context_belief: rssm.ShiftScale,
     ) -> Prediction:
         def f(carry, x):
-            prev_belief_state = carry
+            prev_state = carry
             if callable_policy:
                 key = x
+                prev_belief_state = BeliefAndState(context_belief, prev_state)
                 action = policy(jax.lax.stop_gradient(prev_belief_state), key)
             else:
                 action, key = x
-            out = self.dynamics.step(
-                contextualize(prev_belief_state.state, prev_belief_state.belief.shift),
-                action,
-            )
-            next_belief_state = BeliefAndState(context_belief, out.next_state)
-            out = Prediction(next_belief_state, out.reward)
-            return next_belief_state, out
+            next_state = self.model.step.predict(prev_state, action)
+            next_state = contextualize_state(next_state, context_belief.shift)
+            return next_state, next_state
 
-        init = BeliefAndState(context_belief, initial_state)
         callable_policy = False
         if isinstance(policy, jax.Array):
             inputs: tuple[jax.Array, jax.random.KeyArray] | jax.random.KeyArray = (
@@ -398,7 +251,11 @@ class WorldModel(eqx.Module):
         else:
             callable_policy = True
             inputs = jax.random.split(key, horizon)
-        _, out = jax.lax.scan(
+        from_flat_init_state = rssm.State.from_flat(
+            initial_state, self.model.cell.stochastic_size
+        )
+        init = contextualize_state(from_flat_init_state, context_belief.shift)
+        _, state = jax.lax.scan(
             f,
             init,
             inputs,
@@ -415,15 +272,19 @@ def variational_step(
     learner: Learner,
     opt_state: OptState,
     key: jax.random.KeyArray,
-    beta: float = 1.0,
-    free_nats: float = 0.0,
+    beta_context: float = 1.0,
+    beta_model: float = 1.0,
+    free_nats_context: float = 0.0,
+    free_nats_model: float = 0.0,
 ):
     def loss_fn(model):
         infer_fn = eqx.filter_vmap(lambda f, a: infer(f, a, model, key))
         y_hat, context_posterior, context_prior = infer_fn(features, actions)
         y = jnp.concatenate([next_states, features.reward], -1)
         reconstruction_loss = l2_loss(y_hat, y).mean()
-        kl_loss = kl_divergence(context_posterior, context_prior, free_nats).mean()
+        kl_loss = rssm.kl_divergence(
+            context_posterior, context_prior, context_free_nats
+        ).mean()
         extra = dict(
             reconstruction_loss=reconstruction_loss,
             kl_loss=kl_loss,
@@ -437,21 +298,19 @@ def variational_step(
 
 
 def infer(
-    features: Features, actions: jax.Array, model: WorldModel, key: jax.random.KeyArray
+    features: rssm.Features,
+    actions: jax.Array,
+    model: ContextualWorldModel,
+    key: jax.random.KeyArray,
 ):
     context_posterior = model.infer_context(features, actions)
-    context_prior = ShiftScale(
+    context_prior = rssm.ShiftScale(
         jnp.zeros_like(context_posterior.shift), jnp.ones_like(context_posterior.scale)
     )
-    context = dtx.Normal(*context_posterior).sample(seed=key)
-    pred_fn = lambda features, actions: model(features.observation, actions, context)
+    context_key, transition_key = jax.random.split(key)
+    context = dtx.Normal(*context_posterior).sample(seed=context_key)
+    pred_fn = lambda features, actions: model(
+        features.observation, actions, context, transition_key
+    )
     outs = eqx.filter_vmap(pred_fn)(features, actions)
     return outs, context_posterior, context_prior
-
-
-def kl_divergence(
-    posterior: ShiftScale, prior: ShiftScale, free_nats: float = 0.0
-) -> jax.Array:
-    prior_dist = dtx.MultivariateNormalDiag(*prior)
-    posterior_dist = dtx.MultivariateNormalDiag(*posterior)
-    return jnp.maximum(posterior_dist.kl_divergence(prior_dist), free_nats)
