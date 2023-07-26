@@ -17,13 +17,6 @@ class BeliefAndState(NamedTuple):
     state: State
 
 
-def contextualize_state(state: State, context: jax.Array) -> State:
-    return State(
-        state.stochastic,
-        jnp.concatenate([state.deterministic, context], axis=-1),
-    )
-
-
 class FeedForwardBlock(eqx.Module):
     norm: eqx.nn.LayerNorm
     hidden: eqx.nn.Linear
@@ -157,9 +150,14 @@ class DomainContext(eqx.Module):
         return ShiftScale(mu, stddev)
 
 
+def contextualize_action(action, context):
+    return jnp.concatenate([action, context], -1)
+
+
 class ContextualWorldModel(eqx.Module):
     context: DomainContext
     world_model: WorldModel
+    context_encoder: eqx.nn.Linear
 
     def __init__(
         self,
@@ -175,7 +173,7 @@ class ContextualWorldModel(eqx.Module):
         *,
         key: jax.random.KeyArray,
     ):
-        context_key, model_key = jax.random.split(key)
+        context_key, model_key, encoder_key = jax.random.split(key, 3)
         aux_dim = 4  # terminal, done, cost, reward
         self.context = DomainContext(
             num_context_layers,
@@ -186,10 +184,13 @@ class ContextualWorldModel(eqx.Module):
             context_size,
             key=context_key,
         )
+        self.context_encoder = eqx.nn.Linear(
+            context_size + action_dim, action_dim, key=encoder_key
+        )
         self.world_model = WorldModel(
             state_dim,
             action_dim,
-            deterministic_size + context_size,
+            deterministic_size,
             stochastic_size,
             hidden_size,
             key=model_key,
@@ -202,7 +203,8 @@ class ContextualWorldModel(eqx.Module):
         context: jax.Array,
         key: jax.random.KeyArray,
     ) -> tuple[State, jax.Array, ShiftScale, ShiftScale]:
-        init_state = contextualize_state(self.world_model.cell.init, context)
+        init_state = self.world_model.cell.init
+        actions = self.context_encoder(contextualize_action(actions, context))
         return self.world_model(features, actions, key, init_state)
 
     def infer_context(self, features: Features, actions: jax.Array) -> ShiftScale:
@@ -216,7 +218,7 @@ class ContextualWorldModel(eqx.Module):
         context: jax.Array,
         key: jax.random.KeyArray,
     ) -> State:
-        state = contextualize_state(state, context)
+        action = self.context_encoder(contextualize_action(action, context))
         return self.world_model.step(state, observation, action, key)
 
     def sample(
@@ -235,8 +237,10 @@ class ContextualWorldModel(eqx.Module):
                 action = policy(jax.lax.stop_gradient(prev_belief_state), key)
             else:
                 action, key = x
+            action = self.context_encoder(
+                contextualize_action(action, context_belief.shift)
+            )
             next_state = self.world_model.step.predict(prev_state, action)
-            next_state = contextualize_state(next_state, context_belief.shift)
             return next_state, next_state
 
         callable_policy = False
@@ -249,13 +253,12 @@ class ContextualWorldModel(eqx.Module):
         else:
             callable_policy = True
             inputs = jax.random.split(key, horizon)
-        from_flat_init_state = State.from_flat(
+        flat_init_state = State.from_flat(
             initial_state, self.world_model.cell.stochastic_size
         )
-        init = contextualize_state(from_flat_init_state, context_belief.shift)
         _, state = jax.lax.scan(
             f,
-            init,
+            flat_init_state,
             inputs,
         )
         out = jax.vmap(self.decoder)(state.flatten())

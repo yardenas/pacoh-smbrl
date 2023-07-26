@@ -21,13 +21,13 @@ from smbrl.utils import Count, Learner, add_to_buffer, normalize
 
 @eqx.filter_jit
 def policy(actor, model, prev_state, belief, observation, key):
-    def per_env_policy(prev_state, observation, context, key):
+    def per_env_policy(prev_state, observation, belief, key):
         model_key, policy_key = jax.random.split(key)
         current_rssm_state = model.step(
             prev_state.rssm_state,
             observation,
             prev_state.prev_action,
-            context,
+            belief.shift,
             model_key,
         )
         action = actor.act(maki.BeliefAndState(belief, current_rssm_state), policy_key)
@@ -36,7 +36,7 @@ def policy(actor, model, prev_state, belief, observation, key):
     return jax.vmap(per_env_policy)(
         prev_state,
         observation,
-        belief.shift,
+        belief,
         jax.random.split(key, observation.shape[0]),
     )
 
@@ -83,7 +83,7 @@ class MMBRL(AgentBase):
         self.context_belief = maki.ShiftScale(belief, jnp.ones_like(belief))
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
         self.actor_critic = ContextualModelBasedActorCritic(
-            np.prod(observation_space.shape),
+            config.agent.model.deterministic_size + config.agent.model.stochastic_size,
             np.prod(action_space.shape),
             config.agent.actor,
             config.agent.critic,
