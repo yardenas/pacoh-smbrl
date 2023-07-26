@@ -116,7 +116,6 @@ class ReplayBuffer:
                 (0, 1),
             )
             task_ids = self.rs.choice(valid_tasks, size=batch_size)
-            # Add 1 for randint's open endedness on the right side.
             highs = (
                 self.episode_ids[task_ids]
                 if strict
