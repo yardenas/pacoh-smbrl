@@ -12,6 +12,8 @@ model:
   intermediate_size: 512
   num_heads: 2
   context_size: 64
+  stochastic_size: 64
+  deterministic_size: 128
 actor:
   n_layers: 2
   hidden_size: 128
@@ -34,6 +36,9 @@ model_optimizer:
 discount: 0.99
 lambda_: 0.97
 plan_horizon: 15
-update_steps: 100
-kl_scale: 1e-4
-free_nats: 0.01
+update_steps: 20
+train_every: 10
+beta_context: 0.0001
+beta_model: 0.0001
+free_nats_context: 2.
+free_nats_model: 2.

@@ -159,7 +159,7 @@ class DomainContext(eqx.Module):
 
 class ContextualWorldModel(eqx.Module):
     context: DomainContext
-    model: WorldModel
+    world_model: WorldModel
 
     def __init__(
         self,
@@ -186,7 +186,7 @@ class ContextualWorldModel(eqx.Module):
             context_size,
             key=context_key,
         )
-        self.model = WorldModel(
+        self.world_model = WorldModel(
             state_dim,
             action_dim,
             deterministic_size + context_size,
@@ -202,8 +202,8 @@ class ContextualWorldModel(eqx.Module):
         context: jax.Array,
         key: jax.random.KeyArray,
     ) -> tuple[State, jax.Array, ShiftScale, ShiftScale]:
-        init_state = contextualize_state(self.model.cell.init, context)
-        return self.model(features, actions, key, init_state)
+        init_state = contextualize_state(self.world_model.cell.init, context)
+        return self.world_model(features, actions, key, init_state)
 
     def infer_context(self, features: Features, actions: jax.Array) -> ShiftScale:
         return self.context(features, actions)
@@ -217,7 +217,7 @@ class ContextualWorldModel(eqx.Module):
         key: jax.random.KeyArray,
     ) -> State:
         state = contextualize_state(state, context)
-        return self.model.step(state, observation, action, key)
+        return self.world_model.step(state, observation, action, key)
 
     def sample(
         self,
@@ -235,7 +235,7 @@ class ContextualWorldModel(eqx.Module):
                 action = policy(jax.lax.stop_gradient(prev_belief_state), key)
             else:
                 action, key = x
-            next_state = self.model.step.predict(prev_state, action)
+            next_state = self.world_model.step.predict(prev_state, action)
             next_state = contextualize_state(next_state, context_belief.shift)
             return next_state, next_state
 
@@ -250,7 +250,7 @@ class ContextualWorldModel(eqx.Module):
             callable_policy = True
             inputs = jax.random.split(key, horizon)
         from_flat_init_state = State.from_flat(
-            initial_state, self.model.cell.stochastic_size
+            initial_state, self.world_model.cell.stochastic_size
         )
         init = contextualize_state(from_flat_init_state, context_belief.shift)
         _, state = jax.lax.scan(

@@ -24,7 +24,11 @@ def policy(actor, model, prev_state, belief, observation, key):
     def per_env_policy(prev_state, observation, key):
         model_key, policy_key = jax.random.split(key)
         current_rssm_state = model.step(
-            prev_state.rssm_state, observation, prev_state.prev_action, model_key
+            prev_state.rssm_state,
+            observation,
+            prev_state.prev_action,
+            belief.shit,
+            model_key,
         )
         action = actor.act(maki.BeliefAndState(belief, current_rssm_state), policy_key)
         return action, AgentState(current_rssm_state, action)
@@ -89,7 +93,9 @@ class MMBRL(AgentBase):
             self.context_belief,
         )
         self.state = AgentState.init(
-            config.training.parallel_envs, self.model.cell, np.prod(action_space.shape)
+            config.training.parallel_envs,
+            self.model.world_model.cell,
+            np.prod(action_space.shape),
         )
         self.should_train = Count(config.agent.train_every)
 
@@ -169,8 +175,10 @@ class MMBRL(AgentBase):
             self.model_learner,
             self.model_learner.state,
             next(self.prng),
-            self.config.agent.kl_scale,
-            self.config.agent.free_nats,
+            self.config.agent.beta_context,
+            self.config.agent.beta_model,
+            self.config.agent.free_nats_context,
+            self.config.agent.free_nats_model,
         )
         self.logger["agent/model/loss"] = float(loss.mean())
         self.logger["agent/model/reconstruction"] = float(
