@@ -21,20 +21,23 @@ from smbrl.utils import Count, Learner, add_to_buffer, normalize
 
 @eqx.filter_jit
 def policy(actor, model, prev_state, belief, observation, key):
-    def per_env_policy(prev_state, observation, key):
+    def per_env_policy(prev_state, observation, context, key):
         model_key, policy_key = jax.random.split(key)
         current_rssm_state = model.step(
             prev_state.rssm_state,
             observation,
             prev_state.prev_action,
-            belief.shit,
+            context,
             model_key,
         )
         action = actor.act(maki.BeliefAndState(belief, current_rssm_state), policy_key)
         return action, AgentState(current_rssm_state, action)
 
     return jax.vmap(per_env_policy)(
-        prev_state, observation, jax.random.split(key, observation.shape[0])
+        prev_state,
+        observation,
+        belief.shift,
+        jax.random.split(key, observation.shape[0]),
     )
 
 
