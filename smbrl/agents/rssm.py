@@ -251,7 +251,8 @@ class WorldModel(eqx.Module):
             prev_state = carry
             if callable_policy:
                 key = inputs
-                action = policy(jax.lax.stop_gradient(prev_state.flatten()), key)
+                key, p_key = jax.random.split(key)
+                action = policy(jax.lax.stop_gradient(prev_state.flatten()), p_key)
             else:
                 action, key = inputs
             state = self.cell.predict(prev_state, action, key)

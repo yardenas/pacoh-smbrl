@@ -150,7 +150,13 @@ class DomainContext(eqx.Module):
         return ShiftScale(mu, stddev)
 
 
+def repeat_context(context: jax.Array, num_repeat: int) -> jax.Array:
+    return jnp.repeat(context[None], num_repeat, 0)
+
+
 def contextualize_action(action, context):
+    if action.ndim - context.ndim == 1:
+        context = repeat_context(context, action.shape[0])
     return jnp.concatenate([action, context], -1)
 
 
@@ -203,8 +209,8 @@ class ContextualWorldModel(eqx.Module):
         context: jax.Array,
         key: jax.random.KeyArray,
     ) -> tuple[State, jax.Array, ShiftScale, ShiftScale]:
+        actions = jax.vmap(self.context_encoder)(contextualize_action(actions, context))
         init_state = self.world_model.cell.init
-        actions = self.context_encoder(contextualize_action(actions, context))
         return self.world_model(features, actions, key, init_state)
 
     def infer_context(self, features: Features, actions: jax.Array) -> ShiftScale:
@@ -233,14 +239,15 @@ class ContextualWorldModel(eqx.Module):
             prev_state = carry
             if callable_policy:
                 key = x
+                key, p_key = jax.random.split(key)
                 prev_belief_state = BeliefAndState(context_belief, prev_state)
-                action = policy(jax.lax.stop_gradient(prev_belief_state), key)
+                action = policy(jax.lax.stop_gradient(prev_belief_state), p_key)
             else:
                 action, key = x
             action = self.context_encoder(
                 contextualize_action(action, context_belief.shift)
             )
-            next_state = self.world_model.step.predict(prev_state, action)
+            next_state = self.world_model.cell.predict(prev_state, action, key)
             return next_state, next_state
 
         callable_policy = False
@@ -261,9 +268,12 @@ class ContextualWorldModel(eqx.Module):
             flat_init_state,
             inputs,
         )
-        out = jax.vmap(self.decoder)(state.flatten())
+        out = jax.vmap(self.world_model.decoder)(state.flatten())
         reward, cost = out[:, -2], out[:, -1]
-        out = Prediction(state.flatten(), reward, cost)
+        context_belief = jax.tree_map(
+            lambda x: repeat_context(x, state.stochastic.shape[0]), context_belief
+        )
+        out = Prediction(BeliefAndState(context_belief, state), reward, cost)
         return out
 
 
@@ -293,12 +303,14 @@ def variational_step(
     def loss_fn(model):
         infer_fn = eqx.filter_vmap(lambda f, a: infer(f, a, model, key))
         outs = infer_fn(features, actions)
-        y = jnp.concatenate([next_states, features.reward], -1)
+        y = jnp.concatenate([next_states, features.reward, features.cost], -1)
         reconstruction_loss = l2_loss(outs.flat_preds, y).mean()
         context_kl_loss = kl_divergence(
             outs.context_posterior, outs.context_prior, free_nats_context
         ).mean()
-        transition_kl_loss = kl_divergence(outs.posterior, outs.prior, free_nats_model)
+        transition_kl_loss = kl_divergence(
+            outs.posterior, outs.prior, free_nats_model
+        ).mean()
         extra = dict(
             reconstruction_loss=reconstruction_loss,
             context_kl_loss=context_kl_loss,
@@ -331,7 +343,7 @@ def infer(
     context_key, transition_key = jax.random.split(key)
     context = dtx.Normal(*context_posterior).sample(seed=context_key)
     pred_fn = lambda features, actions: model(
-        features.observation, actions, context, transition_key
+        features, actions, context, transition_key
     )
     state, flat_preds, posterior, prior = eqx.filter_vmap(pred_fn)(features, actions)
     return InferenceOutputs(

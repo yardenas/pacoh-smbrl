@@ -15,7 +15,7 @@ from smbrl.agents.smbrl import AgentState
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
-from smbrl.types import FloatArray, Prediction
+from smbrl.types import FloatArray
 from smbrl.utils import Count, Learner, add_to_buffer, normalize
 
 
@@ -149,7 +149,6 @@ class MMBRL(AgentBase):
         )
         trajectories = self.adaptation_buffer.get()
         self.context_belief = infer_context(trajectories, self.model)
-        evaluate_model(self.model, trajectories, self.context_belief)
 
     def update(self) -> None:
         for _ in range(self.config.agent.update_steps):
@@ -183,12 +182,12 @@ class MMBRL(AgentBase):
             self.config.agent.free_nats_context,
             self.config.agent.free_nats_model,
         )
+        states = rest.pop("states").flatten()
+        context_posterior = rest.pop("context_posterior")
+        for k, v in rest.items():
+            self.logger[f"agent/model/{k}"] = float(v.mean())
         self.logger["agent/model/loss"] = float(loss.mean())
-        self.logger["agent/model/reconstruction"] = float(
-            rest["reconstruction_loss"].mean()
-        )
-        self.logger["agent/model/kl"] = float(rest["kl_loss"].mean())
-        return rest["states"].flatten(), rest["context_posterior"]
+        return states, context_posterior
 
     def reset(self):
         self.context_belief = maki.ShiftScale(
@@ -243,59 +242,3 @@ class TrajectoryBuffer:
 
     def reset(self) -> None:
         self.data = []
-
-
-def evaluate_model(model, batch, context):
-    horizon = 15
-    key = jax.random.PRNGKey(10)
-    pred = eqx.filter_vmap(lambda o, a, c: model.sample(horizon, o[0], key, a, c))(
-        batch.observation[:, -1], batch.action[:, -1, :horizon], context
-    )
-    pred = Prediction(pred.next_state.state, pred.reward)
-    pred = jnp.concatenate([pred.next_state, pred.reward[..., None]], axis=-1)
-    plot(
-        batch.observation[:, -1:, :1],
-        batch.next_observation[:, -1:, :horizon],
-        pred[:, None],
-        1,
-        "model.png",
-    )
-    return pred
-
-
-def plot(context, y, y_hat, context_t, savename):
-    import matplotlib.pyplot as plt
-
-    t_test = np.arange(y.shape[2])
-    t_context = np.arange(context.shape[2])
-
-    plt.figure(figsize=(10, 5), dpi=600)
-    for i in range(min(6, context.shape[0])):
-        plt.subplot(3, 4, i + 1)
-        plt.plot(t_context, context[i, 0, :, 2], "b.", label="context")
-        plt.plot(
-            t_test,
-            y_hat[i, 0, :, 2],
-            "r",
-            label="prediction",
-            linewidth=1.0,
-        )
-        plt.plot(
-            t_test,
-            y[i, 0, :, 2],
-            "c",
-            label="ground truth",
-            linewidth=1.0,
-        )
-        ax = plt.gca()
-        ax.xaxis.set_ticks_position("bottom")
-        ax.yaxis.set_ticks_position("left")
-        ax.spines["left"].set_position(("data", 0))
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.axvline(context_t, color="k", linestyle="--", linewidth=1.0)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(savename, bbox_inches="tight")
-    plt.show(block=False)
-    plt.close()
