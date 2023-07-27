@@ -5,13 +5,11 @@ replay_buffer:
   num_shots: 4
   capacity: 1000
 model:
-  num_dynamics_layers: 3
-  dynamics_size: 128
   num_context_layers: 2
   hidden_size: 128
   intermediate_size: 512
   num_heads: 2
-  context_size: 64
+  context_size: 1
   stochastic_size: 64
   deterministic_size: 128
 actor:
@@ -39,6 +37,6 @@ plan_horizon: 15
 update_steps: 20
 train_every: 10
 beta_context: 0.0001
-beta_model: 0.0001
+beta_model: 0.1
 free_nats_context: 2.
-free_nats_model: 2.
+free_nats_model: 3.

@@ -15,7 +15,7 @@ from smbrl.agents.smbrl import AgentState
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
 from smbrl.trajectory import TrajectoryData
-from smbrl.types import FloatArray
+from smbrl.types import FloatArray, Prediction
 from smbrl.utils import Count, Learner, add_to_buffer, normalize
 
 
@@ -77,10 +77,10 @@ class MMBRL(AgentBase):
             stochastic_size=config.agent.model.stochastic_size,
             key=next(self.prng),
         )
-        belief = jnp.zeros(
+        context = jnp.zeros(
             [config.training.parallel_envs, config.agent.model.context_size]
         )
-        self.context_belief = maki.ShiftScale(belief, jnp.ones_like(belief))
+        self.context_belief = maki.ShiftScale(context, jnp.ones_like(context))
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
         self.actor_critic = ContextualModelBasedActorCritic(
             config.agent.model.deterministic_size + config.agent.model.stochastic_size,
@@ -218,12 +218,12 @@ def prepare_features(batch: TrajectoryData) -> maki.Features:
     return features
 
 
-def prepare_actor_critic_batch(context, observation):
-    shape = observation.shape[1:3]
+def prepare_actor_critic_batch(context, initial_states):
+    shape = initial_states.shape[1:3]
     tile = lambda c: jnp.tile(c[:, None, None], (1, shape[0], shape[1], 1))
     context_posterior = jax.tree_map(tile, context)
     flatten = lambda x: x.reshape(-1, x.shape[-1])
-    initial_states = flatten(observation)
+    initial_states = flatten(initial_states)
     contexts = jax.tree_map(flatten, context_posterior)
     return contexts, initial_states
 
@@ -242,3 +242,63 @@ class TrajectoryBuffer:
 
     def reset(self) -> None:
         self.data = []
+
+
+def evaluate_model(model, batch, context):
+    horizon = 15
+    key = jax.random.PRNGKey(10)
+    features = prepare_features(batch)
+    state, *_ = eqx.filter_vmap(lambda f, a, c: model(f, a, c, key))(
+        features, batch.action, context
+    )
+    pred = eqx.filter_vmap(lambda s, a, c: model.sample(horizon, s[0], key, a, c))(
+        state, batch.action[:, -1, :horizon], context
+    )
+    pred = Prediction(pred.next_state.state, pred.reward)
+    pred = jnp.concatenate([pred.next_state, pred.reward[..., None]], axis=-1)
+    plot(
+        batch.observation[:, -1:, :1],
+        batch.next_observation[:, -1:, :horizon],
+        pred[:, None],
+        1,
+        "model.png",
+    )
+    return pred
+
+
+def plot(context, y, y_hat, context_t, savename):
+    import matplotlib.pyplot as plt
+
+    t_test = np.arange(y.shape[2])
+    t_context = np.arange(context.shape[2])
+
+    plt.figure(figsize=(10, 5), dpi=600)
+    for i in range(min(6, context.shape[0])):
+        plt.subplot(3, 4, i + 1)
+        plt.plot(t_context, context[i, 0, :, 2], "b.", label="context")
+        plt.plot(
+            t_test,
+            y_hat[i, 0, :, 2],
+            "r",
+            label="prediction",
+            linewidth=1.0,
+        )
+        plt.plot(
+            t_test,
+            y[i, 0, :, 2],
+            "c",
+            label="ground truth",
+            linewidth=1.0,
+        )
+        ax = plt.gca()
+        ax.xaxis.set_ticks_position("bottom")
+        ax.yaxis.set_ticks_position("left")
+        ax.spines["left"].set_position(("data", 0))
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.axvline(context_t, color="k", linestyle="--", linewidth=1.0)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(savename, bbox_inches="tight")
+    plt.show(block=False)
+    plt.close()
