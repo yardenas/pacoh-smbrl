@@ -195,7 +195,7 @@ class ContextualWorldModel(eqx.Module):
         )
         self.world_model = WorldModel(
             state_dim,
-            action_dim,
+            action_dim + context_size,
             deterministic_size,
             stochastic_size,
             hidden_size,
@@ -209,7 +209,7 @@ class ContextualWorldModel(eqx.Module):
         context: jax.Array,
         key: jax.random.KeyArray,
     ) -> tuple[State, jax.Array, ShiftScale, ShiftScale]:
-        actions = jax.vmap(self.context_encoder)(contextualize_action(actions, context))
+        actions = contextualize_action(actions, context)
         init_state = self.world_model.cell.init
         return self.world_model(features, actions, key, init_state)
 
@@ -224,9 +224,10 @@ class ContextualWorldModel(eqx.Module):
         context: jax.Array,
         key: jax.random.KeyArray,
     ) -> State:
-        action = self.context_encoder(contextualize_action(action, context))
+        action = contextualize_action(action, context)
         return self.world_model.step(state, observation, action, key)
 
+    # TODO (yarden): immediate suspect
     def sample(
         self,
         horizon: int,
@@ -244,9 +245,7 @@ class ContextualWorldModel(eqx.Module):
                 action = policy(jax.lax.stop_gradient(prev_belief_state), p_key)
             else:
                 action, key = x
-            action = self.context_encoder(
-                contextualize_action(action, context_belief.shift)
-            )
+            action = contextualize_action(action, context_belief.shift)
             next_state = self.world_model.cell.predict(prev_state, action, key)
             return next_state, next_state
 
