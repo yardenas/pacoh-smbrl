@@ -15,19 +15,26 @@ from smbrl.utils import Learner, contextualize
 class ContextualContinuousActor(ac.ContinuousActor):
     def act(
         self,
-        state: maki.BeliefAndState,
+        observation: maki.BeliefAndState,
         key: Optional[jax.random.KeyArray] = None,
         deterministic: bool = False,
     ) -> jax.Array:
         flat_state = jnp.concatenate(
-            [state.belief.shift, state.belief.scale, state.state], axis=-1
+            [
+                observation.belief.shift,
+                observation.belief.scale,
+                observation.state.flatten(),
+            ],
+            axis=-1,
         )
         return super().act(flat_state, key, deterministic)
 
 
 class ContextualCritic(ac.Critic):
-    def __call__(self, state: maki.BeliefAndState) -> jax.Array:
-        flat_state = contextualize(state.state, state.belief.shift)
+    def __call__(self, observation: maki.BeliefAndState) -> jax.Array:
+        flat_state = contextualize(
+            observation.state.flatten(), observation.belief.shift
+        )
         return super().__call__(flat_state)
 
 
@@ -77,9 +84,9 @@ class ContextualModelBasedActorCritic(ac.ModelBasedActorCritic):
     def update(
         self,
         model: types.Model,
-        initial_states: types.FloatArray,
+        initial_states: jax.Array,
         key: jax.random.KeyArray,
-    ):
+    ) -> dict[str, float]:
         actor_critic_fn = partial(self.update_fn, model.sample)
         results = actor_critic_fn(
             self.horizon,

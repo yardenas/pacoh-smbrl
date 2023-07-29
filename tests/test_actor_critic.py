@@ -22,11 +22,13 @@ def sharp_sigmoid(x, k=1.0):
 def rollout(
     horizon: int,
     initial_state: jax.Array,
+    key: jax.random.KeyArray,
     policy: types.Policy,
 ) -> types.Prediction:
     def f(carry, x):
         prev_state = carry
-        action = policy(jax.lax.stop_gradient(prev_state))
+        key = x
+        action = policy(jax.lax.stop_gradient(prev_state), key)
         out = step(
             prev_state,
             action,
@@ -34,7 +36,8 @@ def rollout(
         return out.next_state, out
 
     init = initial_state
-    _, out = jax.lax.scan(f, init, None, horizon)
+    inputs = jax.random.split(key, horizon)
+    _, out = jax.lax.scan(f, init, inputs, horizon)
     return out  # type: ignore
 
 
@@ -52,7 +55,7 @@ class DummmyModel(types.Model):
         key: jax.random.KeyArray,
         policy: types.Policy,
     ) -> types.Prediction:
-        return rollout(horizon, initial_state, policy)
+        return rollout(horizon, initial_state, key, policy)
 
 
 def step(state, action):
@@ -75,8 +78,8 @@ def optimal_policy(state, safe=False):
     return jnp.asarray([a])
 
 
-def evaluate(policy):
-    trajectories = jax.vmap(lambda s: rollout(TIME_HORIZON, s, policy))(
+def evaluate(policy, key):
+    trajectories = jax.vmap(lambda s: rollout(TIME_HORIZON, s, key, policy))(
         jnp.zeros((BATCH_SIZE, STATE_DIM))
     )
     objective = trajectories.reward.mean(0).sum()
@@ -155,13 +158,16 @@ def test_safe_model_based_actor_critic(safe):
         if i % 10 == 0:
             for k, v in outs.items():
                 print(k, v)
-            policy = lambda state: actor_critic.actor.act(state, deterministic=True)
-            objective, constraint = evaluate(policy)
+            key, n_key = jax.random.split(key)
+            policy = lambda state, key: actor_critic.actor.act(
+                state, key, deterministic=True
+            )
+            objective, constraint = evaluate(policy, n_key)
             print(f"------Objective: {objective}, constraint: {constraint}------")
-    policy = lambda state: actor_critic.actor.act(state, deterministic=True)
-    objective, constraint = evaluate(policy)
+    policy = lambda state, _: actor_critic.actor.act(state, deterministic=True)
+    objective, constraint = evaluate(policy, key)
     solution_objective, solution_constraint = evaluate(
-        lambda s: optimal_policy(s, safe)
+        lambda s, _: optimal_policy(s, safe), key
     )
     assert np.isclose(objective, solution_objective, 0.5, 0.5)
     if safe:
@@ -177,10 +183,13 @@ def test_model_based_actor_critic(actor_critic):
         if i % 10 == 0:
             for k, v in outs.items():
                 print(k, v)
-            policy = lambda state: actor_critic.actor.act(state, deterministic=True)
-            objective, constraint = evaluate(policy)
+            policy = lambda state, key: actor_critic.actor.act(
+                state, key, deterministic=True
+            )
+            key, n_key = jax.random.split(key)
+            objective, constraint = evaluate(policy, key)
             print(f"------Objective: {objective}, constraint: {constraint}------")
-    policy = lambda state: actor_critic.actor.act(state, deterministic=True)
-    objective, constraint = evaluate(policy)
-    solution_objective, _ = evaluate(lambda s: optimal_policy(s, False))
+    policy = lambda state, _: actor_critic.actor.act(state, deterministic=True)
+    objective, constraint = evaluate(policy, key)
+    solution_objective, _ = evaluate(lambda s, _: optimal_policy(s, False), key)
     assert np.isclose(objective, solution_objective, 1e-1, 1e-1)

@@ -40,19 +40,19 @@ class ContinuousActor(eqx.Module):
 
     def act(
         self,
-        state: Any,
+        observation: Any,
         key: Optional[jax.random.KeyArray] = None,
         deterministic: bool = False,
     ) -> jax.Array:
         if deterministic:
-            samples, log_probs = self(state).sample_and_log_prob(
+            samples, log_probs = self(observation).sample_and_log_prob(
                 seed=jax.random.PRNGKey(0), sample_shape=100
             )
             most_likely = jnp.argmax(log_probs)
             return samples[most_likely]
         else:
             assert key is not None
-            return self(state).sample(seed=key)
+            return self(observation).sample(seed=key)
 
 
 class Critic(eqx.Module):
@@ -68,8 +68,8 @@ class Critic(eqx.Module):
     ):
         self.net = eqx.nn.MLP(state_dim, 1, hidden_size, n_layers, key=key)
 
-    def __call__(self, state: Any) -> jax.Array:
-        x = self.net(state)
+    def __call__(self, observation: Any) -> jax.Array:
+        x = self.net(observation)
         return x.squeeze(-1)
 
 
@@ -105,7 +105,7 @@ class ModelBasedActorCritic:
     def update(
         self,
         model: types.Model,
-        initial_states: types.FloatArray,
+        initial_states: jax.Array,
         key: jax.random.KeyArray,
     ) -> dict[str, float]:
         actor_critic_fn = partial(self.update_fn, model.sample)
@@ -133,9 +133,9 @@ class ModelBasedActorCritic:
 
 
 def discounted_cumsum(x: jax.Array, discount: float) -> jax.Array:
-    # Divide by discount to have the first discount value from 1: [1, discount,
-    # discount^2 ...]
-    scales = jnp.cumprod(jnp.ones_like(x) * discount) / discount
+    # [1, discount, discount^2 ...]
+    scales = jnp.cumprod(jnp.ones_like(x)[:-1] * discount)
+    scales = jnp.concatenate([jnp.ones_like(scales[:1]), scales], -1)
     # Flip scales since jnp.convolve flips it as default.
     return jnp.convolve(x, scales[::-1])[-x.shape[0] :]
 
@@ -158,9 +158,7 @@ def actor_loss_fn(
     discount: float,
     lambda_: float,
 ) -> tuple[jax.Array, tuple[types.Prediction, jax.Array]]:
-    traj_key, policy_key = jax.random.split(key, 2)
-    policy = lambda state: actor.act(state, key=policy_key)
-    trajectories = rollout_fn(horizon, initial_states, traj_key, policy)
+    trajectories = rollout_fn(horizon, initial_states, key, actor.act)
     # vmap over batch and time axes.
     bootstrap_values = jax.vmap(jax.vmap(critic))(trajectories.next_state)
     lambda_values = eqx.filter_vmap(compute_lambda_values)(

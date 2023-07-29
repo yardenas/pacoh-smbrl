@@ -57,7 +57,7 @@ class Agent(Protocol):
     config: DictConfig
     model: "Model"
 
-    def __call__(self, observation: FloatArray) -> FloatArray:
+    def __call__(self, observation: FloatArray, train: bool = False) -> FloatArray:
         ...
 
     def observe(self, trajectory: "TrajectoryData") -> None:
@@ -92,7 +92,7 @@ class RolloutFn(Protocol):
 
 
 class Prediction(NamedTuple):
-    next_state: jax.Array
+    next_state: Any
     reward: jax.Array
     cost: Optional[jax.Array] = None
     next_state_stddev: Optional[jax.Array] = None

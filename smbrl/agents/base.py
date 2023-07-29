@@ -20,6 +20,7 @@ class AgentBase(types.Agent):
     def __call__(
         self,
         observation: types.FloatArray,
+        train: bool = False,
     ) -> types.FloatArray:
         raise NotImplementedError
 

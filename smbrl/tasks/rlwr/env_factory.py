@@ -19,14 +19,12 @@ def get_constraint_funs(domain_name, constraint_names):
         "balance_velocity_constraint": rwrl.cartpole.balance_velocity_constraint,
         "slider_accel_constraint": rwrl.cartpole.slider_accel_constraint,
     }
-
     rwrl_constraints_walker = {
         "joint_angle_constraint": rwrl.walker.joint_angle_constraint,
         "joint_velocity_constraint": rwrl.walker.joint_velocity_constraint,
         "dangerous_fall_constraint": rwrl.walker.dangerous_fall_constraint,
         "torso_upright_constraint": rwrl.walker.torso_upright_constraint,
     }
-
     rwrl_constraints_quadruped = {
         "joint_angle_constraint": rwrl.quadruped.joint_angle_constraint,
         "joint_velocity_constraint": rwrl.quadruped.joint_velocity_constraint,

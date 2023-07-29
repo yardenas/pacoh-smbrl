@@ -101,14 +101,9 @@ class ReplayBuffer:
     def _sample_batch(
         self, batch_size: int, sequence_length: int, num_shots: int, strict=True
     ) -> Iterator[tuple[Any, ...]]:
-        capacity, num_episodes, time_limit = self.observation.shape[0:3]
+        num_episodes, time_limit = self.observation.shape[1:3]
         if strict:
-            if self.task_count <= capacity:
-                # Finds first occurence of episodes with episode_id == 0.
-                # See documentation of np.argmax(). Use only one task if buffer is empty.
-                valid_tasks = max((self.episode_ids == 0).argmax(), 1)
-            else:
-                valid_tasks = capacity
+            valid_tasks = self.valid_tasks
         else:
             valid_tasks = self.observation.shape[0]
         assert time_limit > sequence_length and num_episodes >= num_shots
@@ -143,9 +138,8 @@ class ReplayBuffer:
             next_o = obs_sequence[:, :, 1:]
             yield o, next_o, a, r, c
 
-    def sample(self, n_batches: int) -> Iterator[TrajectoryData]:
-        for batch in self._dataset.take(n_batches):
-            yield TrajectoryData(*map(lambda x: x.numpy(), batch))  # type: ignore
+    def sample(self) -> TrajectoryData:
+        return TrajectoryData(*map(lambda x: x.numpy(), next(self._dataset)))
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -159,7 +153,18 @@ class ReplayBuffer:
 
     @property
     def empty(self):
-        return self.valid_tasks == 0
+        return self.valid_tasks <= 1
+
+    @property
+    def valid_tasks(self):
+        capacity = self.observation.shape[0]
+        if self.task_count <= capacity:
+            # Finds first occurence of episodes with episode_id == 0.
+            # See documentation of np.argmax(). Use only one task if buffer is empty.
+            valid_tasks = max((self.episode_ids == 0).argmax(), 1)
+        else:
+            valid_tasks = capacity
+        return valid_tasks
 
 
 def _make_ids(rs, low, n_samples, batch_size, dim):
@@ -178,8 +183,8 @@ def _make_dataset(generator, example):
         generator,
         *zip(*tuple((v.dtype, v.shape) for v in example)),
     )
-    dataset = dataset.prefetch(10)
-    return dataset
+    dataset = dataset.prefetch(tfd.AUTOTUNE)
+    return iter(dataset)
 
 
 class OnPolicyReplayBuffer(ReplayBuffer):
