@@ -5,8 +5,6 @@ import pytest
 from hydra import compose, initialize
 
 from smbrl import acting, tasks
-from smbrl.agents.asmbrl import ASMBRL
-from smbrl.agents.smbrl import SMBRL
 from smbrl.trainer import Trainer
 from smbrl.trajectory import TrajectoryData
 from smbrl.utils import ensemble_predict, normalize
@@ -14,8 +12,8 @@ from smbrl.utils import ensemble_predict, normalize
 
 @pytest.mark.parametrize(
     "agent",
-    ["asmbrl", "smbrl", "mmbrl"],
-    ids=["asmbrl", "smbrl", "mmbrl"],
+    ["smbrl", "mmbrl"],
+    ids=["smbrl", "mmbrl"],
 )
 def test_training(agent):
     with initialize(version_base=None, config_path="../smbrl/configs"):
@@ -131,67 +129,3 @@ def collect_trajectories(cfg_overrides, agent_class):
         *map(lambda x: x[:, None, :sequence_length], trajectories)
     )
     return trajectories, context, sequence_length, agent
-
-
-@pytest.mark.parametrize(
-    "pred_fn_factory, overrides, agent_class",
-    [
-        (asmbrl_predictions, ASMBRL_CFG, ASMBRL),
-        (smbrl_predictions, SMBRL_CFG, SMBRL),
-    ],
-    ids=["asmbrl", "smbrl"],
-)
-def test_model_learning(pred_fn_factory, overrides, agent_class):
-    trajectories, context, sequence_length, agent = collect_trajectories(
-        overrides, agent_class
-    )
-    horizon = trajectories.observation.shape[2] - context
-    step, sample = pred_fn_factory(agent, horizon)
-    onestep_predictions = step(trajectories.observation, trajectories.action)
-    multistep_predictions = sample(trajectories.observation, trajectories.action)
-    evaluate(onestep_predictions, multistep_predictions, trajectories, context)
-    plot(trajectories.next_observation, multistep_predictions.next_state, context)
-
-
-def evaluate(onestep_predictions, multistep_predictions, trajectories, context):
-    l2 = lambda x, y: ((x - y) ** 2).mean()
-    onestep_reward_mse = l2(onestep_predictions.reward, trajectories.reward)
-    onestep_obs_mse = l2(onestep_predictions.next_state, trajectories.next_observation)
-    print(f"One step Reward MSE: {onestep_reward_mse}")
-    print(f"One step Observation MSE: {onestep_obs_mse}")
-    multistep_reward_mse = l2(multistep_predictions.reward, trajectories.reward)
-    multistep_obs_mse = l2(
-        multistep_predictions.next_state, trajectories.next_observation
-    )
-    print(f"Multistep step Reward MSE: {multistep_reward_mse}")
-    print(f"Multistep Observation MSE: {multistep_obs_mse}")
-
-
-def plot(y, y_hat, context):
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    t = np.arange(y.shape[2])
-
-    plt.figure(figsize=(10, 5), dpi=600)
-    for i in range(NUM_TASKS):
-        plt.subplot(3, 4, i + 1)
-        plt.plot(t, y[i, 0, :, 2], "b.", label="observed")
-        plt.plot(
-            t,
-            y_hat[i, 0, :, 2],
-            "r",
-            label="prediction",
-            linewidth=1.0,
-        )
-        ax = plt.gca()
-        ax.xaxis.set_ticks_position("bottom")
-        ax.yaxis.set_ticks_position("left")
-        ax.spines["left"].set_position(("data", 0))
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.axvline(context, color="k", linestyle="--", linewidth=1.0)
-    plt.tight_layout()
-    plt.show(block=False)
-    plt.pause(100)
-    plt.close()
