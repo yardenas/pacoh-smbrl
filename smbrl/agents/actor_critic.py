@@ -26,7 +26,14 @@ class ContinuousActor(eqx.Module):
         *,
         key: jax.random.KeyArray,
     ):
-        self.net = eqx.nn.MLP(state_dim, action_dim * 2, hidden_size, n_layers, key=key)
+        self.net = eqx.nn.MLP(
+            state_dim,
+            action_dim * 2,
+            hidden_size,
+            n_layers,
+            key=key,
+            activation=jnn.elu,
+        )
         self.init_stddev = init_stddev
 
     def __call__(self, state: jax.Array) -> trx.Normal:
@@ -66,7 +73,9 @@ class Critic(eqx.Module):
         *,
         key: jax.random.KeyArray,
     ):
-        self.net = eqx.nn.MLP(state_dim, 1, hidden_size, n_layers, key=key)
+        self.net = eqx.nn.MLP(
+            state_dim, 1, hidden_size, n_layers, key=key, activation=jnn.elu
+        )
 
     def __call__(self, observation: Any) -> jax.Array:
         x = self.net(observation)
