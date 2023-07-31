@@ -133,8 +133,7 @@ class SMBRL(AgentBase):
         self.state = jax.tree_map(lambda x: jnp.zeros_like(x), self.state)
 
     def update(self) -> None:
-        for _ in range(self.config.agent.update_steps):
-            batch = self.replay_buffer.sample()
+        for batch in self.replay_buffer.sample(self.config.agent.update_steps):
             inferrered_rssm_states = self.update_model(batch)
             initial_states = inferrered_rssm_states.reshape(
                 -1, inferrered_rssm_states.shape[-1]
