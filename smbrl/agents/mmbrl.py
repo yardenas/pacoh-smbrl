@@ -151,8 +151,7 @@ class MMBRL(AgentBase):
         self.context_belief = infer_context(trajectories, self.model)
 
     def update(self) -> None:
-        for _ in range(self.config.agent.update_steps):
-            batch = self.replay_buffer.sample()
+        for batch in self.replay_buffer.sample(self.config.agent.update_steps):
             states, context_posterior = self.update_model(batch)
             context_posterior, initial_states = prepare_actor_critic_batch(
                 context_posterior, batch.observation
