@@ -138,8 +138,9 @@ class ReplayBuffer:
             next_o = obs_sequence[:, :, 1:]
             yield o, next_o, a, r, c
 
-    def sample(self) -> TrajectoryData:
-        return TrajectoryData(*map(lambda x: x.numpy(), next(self._dataset)))
+    def sample(self, n_batches: int) -> Iterator[TrajectoryData]:
+        for batch in self._dataset.take(n_batches):
+            yield TrajectoryData(*map(lambda x: x.numpy(), batch))  # type: ignore
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -183,8 +184,8 @@ def _make_dataset(generator, example):
         generator,
         *zip(*tuple((v.dtype, v.shape) for v in example)),
     )
-    dataset = dataset.prefetch(tfd.AUTOTUNE)
-    return iter(dataset)
+    dataset = dataset.prefetch(10)
+    return dataset
 
 
 class OnPolicyReplayBuffer(ReplayBuffer):
