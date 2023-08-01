@@ -20,11 +20,11 @@ critic:
   n_layers: 3
   hidden_size: 400
 actor_optimizer:
-  lr: 5e-8
+  lr: 8e-5
   eps: 1e-5
   clip: 0.5
 critic_optimizer:
-  lr: 5e-8
+  lr: 8e-5
   eps: 1e-5
   clip: 0.5
 model_optimizer:
