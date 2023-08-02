@@ -104,7 +104,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             "agent/actor/loss": results.actor_loss.item(),
             "agent/critic/loss": results.critic_loss.item(),
             "agent/safety_critic/loss": results.safety_critic_loss.item(),
-            "agent/safety_critic/safe": results.safe.item(),
+            "agent/safety_critic/safe": float(results.safe.item()),
             "agent/safety_critic/constraint": results.constraint.item(),
             "agent/lbsgd/lr": results.new_actor_learning_state[0].lr.item(),
             "agent/lbsgd/eta": results.new_actor_learning_state[0].eta.item(),

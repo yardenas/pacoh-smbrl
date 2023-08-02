@@ -31,7 +31,7 @@ class Learner:
         self, model: PyTree, grads: PyTree, state: optax.OptState
     ) -> tuple[PyTree, optax.OptState]:
         updates, new_opt_state = self.optimizer.update(grads, state)
-        all_ok = all_finite(grads)
+        all_ok = all_finite(updates)
         updates = update_if(
             all_ok, updates, jax.tree_map(lambda x: jnp.zeros_like(x), updates)
         )

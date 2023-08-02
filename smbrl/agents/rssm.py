@@ -116,8 +116,8 @@ class Posterior(eqx.Module):
 class RSSM(eqx.Module):
     prior: Prior
     posterior: Posterior
-    deterministic_size: int
-    stochastic_size: int
+    deterministic_size: int = eqx.static_field()
+    stochastic_size: int = eqx.static_field()
 
     def __init__(
         self,

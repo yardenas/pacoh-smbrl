@@ -28,6 +28,12 @@ model_optimizer:
   eps: 1e-5
   clip: 0.5
 discount: 0.99
+safety_discount: 0.99
+eta: 0.5
+m_0: 5e3
+m_1: 5e6
+eta_rate: 1e-3
+base_lr: 1e-3
 lambda_: 0.97
 plan_horizon: 15
 update_steps: 20
