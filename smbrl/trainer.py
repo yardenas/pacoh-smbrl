@@ -111,7 +111,6 @@ class Trainer:
         )
         if train:
             self.step = step
-            logger.log_metrics(self.step)
         objective, cost_rate, feasibilty = summary.metrics
         logger.log_summary(
             {

@@ -12,7 +12,11 @@ from smbrl.utils import grouper
 
 
 def log_results(
-    trajectory: TrajectoryData, logger: TrainingLogger, step: int, prefix: str
+    trajectory: TrajectoryData,
+    logger: TrainingLogger,
+    step: int,
+    prefix: str,
+    train: bool,
 ) -> tuple[float, float]:
     reward = float(trajectory.reward.sum(1).mean())
     cost = float(trajectory.cost.sum(1).mean())
@@ -23,6 +27,8 @@ def log_results(
         },
         step,
     )
+    if train:
+        logger.log_metrics(step)
     return reward, cost
 
 
@@ -65,7 +71,11 @@ def interact(
                 if episode_count < adaptation_episodes:
                     agent.adapt(np_trajectory)
                 reward, cost = log_results(
-                    np_trajectory, agent.logger, step, "train" if train else "evaluate"
+                    np_trajectory,
+                    agent.logger,
+                    step,
+                    "train" if train else "evaluate",
+                    train,
                 )
                 pbar.set_postfix({"reward": reward, "cost": cost})
                 if render:
