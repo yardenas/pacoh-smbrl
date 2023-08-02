@@ -46,6 +46,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             key=key,
         )
         *_, critic_key = jax.random.split(key, 3)
+        # TODO (yarden): can merge this critic with the original one???
         self.safety_critic = ac.Critic(
             state_dim=state_dim, **critic_config, key=critic_key
         )
