@@ -36,7 +36,7 @@ lambda_: 0.97
 plan_horizon: 15
 update_steps: 20
 train_every: 10
-beta_context: 0.0001
-beta_model: 0.1
+beta_context: 0.1
+beta_model: 0.0001
 free_nats_context: 2.
-free_nats_model: 3.
+free_nats_model: 1.5
