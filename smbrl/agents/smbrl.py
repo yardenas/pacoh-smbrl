@@ -9,7 +9,7 @@ from omegaconf import DictConfig
 
 from smbrl import metrics as m
 from smbrl.agents import rssm
-from smbrl.agents.actor_critic import ModelBasedActorCritic
+from smbrl.agents.actor_critic_factory import make_actor_critic
 from smbrl.agents.base import AgentBase
 from smbrl.logging import TrainingLogger
 from smbrl.replay_buffer import ReplayBuffer
@@ -78,16 +78,12 @@ class SMBRL(AgentBase):
             **config.agent.model,
         )
         self.model_learner = Learner(self.model, config.agent.model_optimizer)
-        self.actor_critic = ModelBasedActorCritic(
+        self.actor_critic = make_actor_critic(
+            config.training.safe,
+            False,
             config.agent.model.stochastic_size + config.agent.model.deterministic_size,
             np.prod(action_space.shape),
-            config.agent.actor,
-            config.agent.critic,
-            config.agent.actor_optimizer,
-            config.agent.critic_optimizer,
-            config.agent.plan_horizon,
-            config.agent.discount,
-            config.agent.lambda_,
+            config,
             next(self.prng),
         )
         self.state = AgentState.init(
