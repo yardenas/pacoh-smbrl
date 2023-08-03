@@ -106,6 +106,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             "agent/safety_critic/loss": results.safety_critic_loss.item(),
             "agent/safety_critic/safe": float(results.safe.item()),
             "agent/safety_critic/constraint": results.constraint.item(),
+            "agent/safety_critic/debiased_safety": results.debiased_safety.item(),
             "agent/lbsgd/lr": results.new_actor_learning_state[0].lr.item(),
             "agent/lbsgd/eta": results.new_actor_learning_state[0].eta.item(),
         }
@@ -132,6 +133,7 @@ class SafeActorCriticStepResults(NamedTuple):
     safety_critic_loss: jax.Array
     safe: jax.Array
     constraint: jax.Array
+    debiased_safety: jax.Array
 
 
 def actor_loss_fn(
@@ -153,6 +155,7 @@ def actor_loss_fn(
         actor, critic, rollout_fn, horizon, initial_states, key, discount, lambda_
     )
     bootstrap_safety_values = jax.vmap(jax.vmap(safety_critic))(trajectories.next_state)
+    bootstrap_safety_values = bias(bootstrap_safety_values, safety_budget)
     safety_lambda_values = eqx.filter_vmap(ac.compute_lambda_values)(
         bootstrap_safety_values, trajectories.cost, safety_discount, lambda_
     )
@@ -173,6 +176,14 @@ def actor_loss_fn(
     )
 
 
+def debias(values, budget):
+    return (budget - values) / budget
+
+
+def bias(values, budget):
+    return budget * (1.0 - values)
+
+
 def jacrev(f, has_aux=False):
     def jacfn(x):
         y, vjp_fn, aux = eqx.filter_vjp(f, x, has_aux=has_aux)
@@ -182,6 +193,10 @@ def jacrev(f, has_aux=False):
     return jacfn
 
 
+# TODO (yarden): normalize safety budget to be between 0 and 1.
+# how? normalize the episodes's sum of cost with the budget?
+# make the target of the nueral network the relative error [(sum_t V_t - B ) / B]?
+# why? because it's better for the nn to predict things around in [0, 1]
 @eqx.filter_jit
 def safe_update_actor_critic(
     rollout_fn: types.RolloutFn,
@@ -234,8 +249,11 @@ def safe_update_actor_critic(
     new_critic, new_critic_state = critic_learner.grad_step(
         critic, grads, critic_learning_state
     )
+    debiased_safety = debias(rest.safety_lambda_values, safety_budget)
     safety_critic_loss, grads = eqx.filter_value_and_grad(ac.critic_loss_fn)(
-        safety_critic, rest.trajectories, rest.safety_lambda_values
+        safety_critic,
+        rest.trajectories,
+        debiased_safety,
     )
     new_safety_critic, new_safety_critic_state = safety_critic_learner.grad_step(
         safety_critic, grads, safety_critic_learning_state
@@ -252,4 +270,5 @@ def safe_update_actor_critic(
         safety_critic_loss,
         rest.safe,
         rest.constraint,
+        debiased_safety,
     )
