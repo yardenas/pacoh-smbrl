@@ -267,6 +267,7 @@ class ContextualWorldModel(eqx.Module):
             flat_init_state,
             inputs,
         )
+        # TODO (yarden): it's a bit weird that the decoder does not rely on the context
         out = jax.vmap(self.world_model.decoder)(state.flatten())
         reward, cost = out[:, -2], out[:, -1]
         context_belief = jax.tree_map(

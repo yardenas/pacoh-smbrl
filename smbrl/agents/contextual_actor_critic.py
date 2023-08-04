@@ -32,6 +32,17 @@ class ContextualContinuousActor(ac.ContinuousActor):
 
 class ContextualCritic(ac.Critic):
     def __call__(self, observation: maki.BeliefAndState) -> jax.Array:
+        # TODO (yarden): forward pass from multiple samples.
+        # Rank by size and use something like wang's to make robust
+        # This can be then used for TD learning of the value function.
+        # Another alternative: https://arxiv.org/pdf/2102.05371.pdf
+        # (which uses quantile critics) &
+        # https://proceedings.neurips.cc/paper/2020/file/0b6ace9e8971cf36f1782aa982a708db-Paper.pdf
+        # (which uses mixes values based on cvar and not wang's).
+        # From this perspective, isn't it just as being robust to an
+        # aleatoric uncertainty of the augmented MDP?
+        # here is another approach for empirical estimation of risk measures:
+        # https://www.tandfonline.com/doi/abs/10.1080/10920277.2003.10596117
         flat_state = contextualize(
             observation.state.flatten(), observation.belief.shift
         )
