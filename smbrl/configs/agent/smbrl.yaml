@@ -30,9 +30,9 @@ model_optimizer:
 discount: 0.99
 safety_discount: 0.99
 eta: 0.5
-m_0: 5e3
-m_1: 5e6
-eta_rate: 1e-3
+m_0: 5e6
+m_1: 5e4
+eta_rate: 8e-6
 base_lr: 1e-3
 lambda_: 0.97
 plan_horizon: 15

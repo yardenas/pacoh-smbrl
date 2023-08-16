@@ -227,7 +227,6 @@ class ContextualWorldModel(eqx.Module):
         action = contextualize_action(action, context)
         return self.world_model.step(state, observation, action, key)
 
-    # TODO (yarden): immediate suspect
     def sample(
         self,
         horizon: int,

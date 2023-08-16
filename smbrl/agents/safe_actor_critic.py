@@ -270,5 +270,5 @@ def safe_update_actor_critic(
         safety_critic_loss,
         rest.safe,
         rest.constraint,
-        debiased_safety,
+        debiased_safety.mean(),
     )
