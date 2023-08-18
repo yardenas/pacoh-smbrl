@@ -21,8 +21,8 @@ def start_fresh(cfg):
     return Trainer(cfg, make_env, task_sampler)
 
 
-def load_state(cfg):
-    return Trainer.from_pickle(cfg)
+def load_state(cfg, state_path):
+    return Trainer.from_pickle(cfg, state_path)
 
 
 @hydra.main(version_base=None, config_path="smbrl/configs", config_name="config")
@@ -36,7 +36,7 @@ def experiment(cfg):
     should_resume = os.path.exists(state_path)
     if should_resume:
         log.info(f"Resuming experiment from: {state_path}")
-        trainer = load_state(cfg)
+        trainer = load_state(cfg, state_path)
     else:
         log.info("Starting a new experiment.")
         trainer = start_fresh(cfg)

@@ -146,14 +146,13 @@ class Trainer:
         return self.tasks_sampler(self.config.training.task_batch_size, train)
 
     @classmethod
-    def from_pickle(cls, config: DictConfig) -> "Trainer":
-        log_path = config.log_dir
-        with open(os.path.join(log_path, "state.pkl"), "rb") as f:
+    def from_pickle(cls, config: DictConfig, state_path) -> "Trainer":
+        with open(state_path, "rb") as f:
             make_env, env_rs, agent, epoch, step, task_sampler = cloudpickle.load(
                 f
             ).values()
-        log.info(f"Resuming experiment from: {log_path}...")
         assert agent.config == config, "Loaded different hyperparameters."
+        log.info(f"Resuming from step {step}")
         return cls(
             config=agent.config,
             make_env=make_env,
@@ -161,6 +160,7 @@ class Trainer:
             start_epoch=epoch,
             seeds=env_rs,
             agent=agent,
+            step=step,
         )
 
     @property
