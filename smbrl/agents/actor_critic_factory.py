@@ -1,3 +1,5 @@
+import numpy as np
+
 from smbrl.agents.actor_critic import ModelBasedActorCritic
 from smbrl.agents.contextual_actor_critic import ContextualModelBasedActorCritic
 from smbrl.agents.safe_actor_critic import SafeModelBasedActorCritic
@@ -10,6 +12,15 @@ def make_actor_critic(safe, contextual, state_dim, action_dim, cfg, key, belief=
     if contextual:
         assert belief is not None
     if safe:
+        # Account for the the discount factor in the budget.
+        episode_safety_budget = (
+            (
+                (cfg.training.safety_budget / cfg.training.time_limit)
+                / (1.0 - cfg.agent.safety_discount)
+            )
+            if cfg.agent.safety_discount < 1.0 - np.finfo(np.float32).eps
+            else cfg.training.safety_budget
+        )
         common_ins = dict(
             state_dim=state_dim,
             action_dim=action_dim,
@@ -21,7 +32,7 @@ def make_actor_critic(safe, contextual, state_dim, action_dim, cfg, key, belief=
             discount=cfg.agent.discount,
             safety_discount=cfg.agent.safety_discount,
             lambda_=cfg.agent.lambda_,
-            safety_budget=cfg.training.safety_budget,
+            safety_budget=episode_safety_budget,
             eta=cfg.agent.eta,
             m_0=cfg.agent.m_0,
             m_1=cfg.agent.m_1,

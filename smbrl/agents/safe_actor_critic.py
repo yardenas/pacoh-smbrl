@@ -154,8 +154,9 @@ def actor_loss_fn(
     loss, (trajectories, lambda_values) = ac.actor_loss_fn(
         actor, critic, rollout_fn, horizon, initial_states, key, discount, lambda_
     )
-    bootstrap_safety_values = jax.vmap(jax.vmap(safety_critic))(trajectories.next_state)
-    bootstrap_safety_values = bias(bootstrap_safety_values, safety_budget)
+    bootstrap_safety_values = (
+        jax.vmap(jax.vmap(safety_critic))(trajectories.next_state) * 10.0
+    )
     safety_lambda_values = eqx.filter_vmap(ac.compute_lambda_values)(
         bootstrap_safety_values, trajectories.cost, safety_discount, lambda_
     )
@@ -249,11 +250,11 @@ def safe_update_actor_critic(
     new_critic, new_critic_state = critic_learner.grad_step(
         critic, grads, critic_learning_state
     )
-    debiased_safety = debias(rest.safety_lambda_values, safety_budget)
+    scaled_safety = rest.lambda_values / 10.0
     safety_critic_loss, grads = eqx.filter_value_and_grad(ac.critic_loss_fn)(
         safety_critic,
         rest.trajectories,
-        debiased_safety,
+        scaled_safety,
     )
     new_safety_critic, new_safety_critic_state = safety_critic_learner.grad_step(
         safety_critic, grads, safety_critic_learning_state
@@ -270,5 +271,5 @@ def safe_update_actor_critic(
         safety_critic_loss,
         rest.safe,
         rest.constraint,
-        debiased_safety.mean(),
+        scaled_safety.mean(),
     )
