@@ -164,7 +164,7 @@ def actor_loss_fn(
     loss = jnp.where(
         jnp.greater(constraint, 0.0),
         loss - eta * jnp.log(constraint + 1e-8),
-        -backup_lr * constraint,
+        -constraint,
     )
     outs = jnp.stack([loss, constraint])
     return outs, ActorLossOuts(
