@@ -5,7 +5,7 @@ import equinox as eqx
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
-from optax import OptState, l2_loss, sigmoid_binary_cross_entropy
+from optax import OptState, l2_loss, softmax_cross_entropy
 
 from smbrl.types import Policy, Prediction
 from smbrl.utils import Learner
@@ -297,11 +297,11 @@ def variational_step(
         infer_fn = lambda features, actions: model(features, actions, key)
         states, y_hat, posteriors, priors = eqx.filter_vmap(infer_fn)(features, actions)
         y_regression = jnp.concatenate([features.observation, features.reward], -1)
-        y_hat_regression = y_hat[:, :2]
+        y_hat_regression = y_hat[..., :-1]
         y_classification = features.cost
-        y_hat_classification = y_hat[:, 2:]
+        y_hat_classification = y_hat[..., -1:]
         regression_loss = l2_loss(y_hat_regression, y_regression).mean()
-        classification_loss = sigmoid_binary_cross_entropy(
+        classification_loss = softmax_cross_entropy(
             y_hat_classification, y_classification
         ).mean()
         reconstruction_loss = regression_loss + classification_loss
