@@ -5,7 +5,7 @@ import equinox as eqx
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
-from optax import OptState, l2_loss, softmax_cross_entropy
+from optax import OptState, l2_loss, sigmoid_binary_cross_entropy
 
 from smbrl.types import Policy, Prediction
 from smbrl.utils import Learner
@@ -277,7 +277,7 @@ class WorldModel(eqx.Module):
         )
         out = jax.vmap(self.decoder)(state.flatten())
         reward, cost_logits = out[:, -2], out[:, -1]
-        cost = jax.nn.sigmoid(cost_logits)
+        cost = jax.nn.softmax(cost_logits)
         out = Prediction(state.flatten(), reward, cost)
         return out
 
@@ -301,8 +301,8 @@ def variational_step(
         y_classification = features.cost
         y_hat_classification = y_hat[..., -1:]
         regression_loss = l2_loss(y_hat_regression, y_regression).mean()
-        classification_loss = softmax_cross_entropy(
-            y_hat_classification, y_classification
+        classification_loss = sigmoid_binary_cross_entropy(
+            y_hat_classification, y_classification.astype(int)
         ).mean()
         reconstruction_loss = regression_loss + classification_loss
         dynamics_kl_loss = kl_divergence(posteriors, priors, free_nats).mean()
