@@ -158,12 +158,8 @@ def actor_loss_fn(
     safety_lambda_values = eqx.filter_vmap(ac.compute_lambda_values)(
         bootstrap_safety_values, trajectories.cost, safety_discount, lambda_
     )
-    constraint = safety_budget - safety_lambda_values.mean()
-    loss = jnp.where(
-        jnp.greater(constraint, 0.0),
-        loss - eta * jnp.log(constraint + 1e-8),
-        -constraint,
-    )
+    # constraint = safety_budget - safety_lambda_values.mean()
+    constraint = 0.0 - safety_lambda_values.mean()
     outs = jnp.stack([loss, constraint])
     return outs, ActorLossOuts(
         trajectories,
@@ -248,7 +244,7 @@ def safe_update_actor_critic(
     new_critic, new_critic_state = critic_learner.grad_step(
         critic, grads, critic_learning_state
     )
-    scaled_safety = rest.lambda_values
+    scaled_safety = rest.safety_lambda_values
     safety_critic_loss, grads = eqx.filter_value_and_grad(ac.critic_loss_fn)(
         safety_critic,
         rest.trajectories,

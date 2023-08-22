@@ -28,16 +28,25 @@ def scale_by_lbsgd(
 
     def update_fn(updates, state, params=None):
         del params
+
+        def happy_case():
+            lr = compute_lr(constraint, loss_grads, constraints_grads, m_0, m_1, eta_t)
+            new_eta = eta_t / eta_rate
+            updates = jax.tree_map(lambda x: x * lr, loss_grads)
+            return updates, LBSGDState(new_eta, lr)
+
+        def fallback():
+            # Taking the negative gradient of the constraints to minimize the costs
+            updates = jax.tree_map(lambda x: x * -1.0, constraints_grads)
+            return updates, LBSGDState(eta, 1.0)
+
         loss_grads, constraints_grads, constraint = updates
         eta_t = state.eta
-        lr = jnp.where(
+        return jax.lax.cond(
             jnp.greater(constraint, 0.0),
-            compute_lr(constraint, loss_grads, constraints_grads, m_0, m_1, eta_t),
-            base_lr,
+            happy_case,
+            fallback,
         )
-        new_eta = jnp.where(jnp.greater(constraint, 0.0), eta_t / eta_rate, eta_t)
-        updates = jax.tree_map(lambda x: x * lr, loss_grads)
-        return updates, LBSGDState(new_eta, lr)
 
     return base.GradientTransformation(init_fn, update_fn)
 
@@ -80,6 +89,6 @@ class LBSGDLearner(Learner):
         self.optimizer = optax.chain(
             scale_by_lbsgd(eta, m_0, m_1, eta_rate, base_lr),
             optax.scale_by_adam(eps=optimizer_config.get("eps", 1e-8)),
-            optax.scale(-1.0),
+            optax.scale(-base_lr),
         )
         self.state = self.optimizer.init(eqx.filter(model, eqx.is_array))
