@@ -92,7 +92,6 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             self.lambda_,
             self.safety_budget,
             self.actor_learner.state[0].eta,
-            self.backup_lr,
         )
         self.actor = results.new_actor
         self.critic = results.new_critic
@@ -149,7 +148,6 @@ def actor_loss_fn(
     lambda_: float,
     safety_budget: float,
     eta: float,
-    backup_lr: float,
 ) -> tuple[jax.Array, ActorLossOuts]:
     loss, (trajectories, lambda_values) = ac.actor_loss_fn(
         actor, critic, rollout_fn, horizon, initial_states, key, discount, lambda_
@@ -158,8 +156,8 @@ def actor_loss_fn(
     safety_lambda_values = eqx.filter_vmap(ac.compute_lambda_values)(
         bootstrap_safety_values, trajectories.cost, safety_discount, lambda_
     )
-    # constraint = safety_budget - safety_lambda_values.mean()
-    constraint = 0.0 - safety_lambda_values.mean()
+    constraint = safety_budget - safety_lambda_values.mean()
+    loss -= eta * jnp.log(constraint + 1e-8)
     outs = jnp.stack([loss, constraint])
     return outs, ActorLossOuts(
         trajectories,
@@ -230,7 +228,6 @@ def safe_update_actor_critic(
             lambda_,
             safety_budget,
             eta,
-            backup_lr,
         ),
         has_aux=True,
     )(actor)
