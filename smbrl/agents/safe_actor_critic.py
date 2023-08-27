@@ -1,15 +1,35 @@
-from functools import partial
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple, Protocol
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jaxtyping import PyTree
 from optax import OptState
 
 from smbrl import types
 from smbrl.agents import actor_critic as ac
-from smbrl.agents.lbsgd import LBSGDLearner
-from smbrl.utils import Learner, pytrees_unstack
+from smbrl.utils import Learner
+
+
+class ActorEvaluation(NamedTuple):
+    trajectories: types.Prediction
+    loss: jax.Array
+    lambda_values: jax.Array
+    safety_lambda_values: jax.Array
+    objective: jax.Array
+    constraint: jax.Array
+    safe: jax.Array
+
+
+class Penalizer(Protocol):
+    state: PyTree
+
+    def __call__(
+        self,
+        evaluate: Callable[[ac.ContinuousActor], ActorEvaluation],
+        state: Any,
+    ) -> tuple[PyTree, Any, ActorEvaluation, dict[str, float]]:
+        ...
 
 
 class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
@@ -26,12 +46,8 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
         safety_discount: float,
         lambda_: float,
         safety_budget: float,
-        eta: float,
-        m_0: float,
-        m_1: float,
-        eta_rate: float,
-        base_lr: float,
         key: jax.random.KeyArray,
+        penalizer: Penalizer,
     ) -> None:
         super().__init__(
             state_dim=state_dim,
@@ -46,26 +62,20 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             key=key,
         )
         *_, critic_key = jax.random.split(key, 3)
-        # TODO (yarden): can merge this critic with the original one???
         self.safety_critic = ac.Critic(
             state_dim=state_dim, **critic_config, key=critic_key
         )
         self.safety_critic_learner = Learner(
             self.safety_critic, critic_optimizer_config
         )
-        self.actor_learner = LBSGDLearner(
+        self.actor_learner = Learner(
             self.actor,
             actor_optimizer_config,
-            eta,
-            m_0,
-            m_1,
-            eta_rate,
-            base_lr,
         )
         self.safety_discount = safety_discount
         self.safety_budget = safety_budget
-        self.backup_lr = base_lr
         self.update_fn = safe_update_actor_critic
+        self.penalizer = penalizer
 
     def update(
         self,
@@ -73,8 +83,8 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
         initial_states: jax.Array,
         key: jax.random.KeyArray,
     ) -> dict[str, float]:
-        actor_critic_fn = partial(self.update_fn, model.sample)
-        results: SafeActorCriticStepResults = actor_critic_fn(
+        results: SafeActorCriticStepResults = self.update_fn(
+            model.sample,
             self.horizon,
             initial_states,
             self.actor,
@@ -91,7 +101,8 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             self.safety_discount,
             self.lambda_,
             self.safety_budget,
-            self.actor_learner.state[0].eta,
+            self.penalizer,
+            self.penalizer.state,
         )
         self.actor = results.new_actor
         self.critic = results.new_critic
@@ -99,25 +110,16 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
         self.actor_learner.state = results.new_actor_learning_state
         self.critic_learner.state = results.new_critic_learning_state
         self.safety_critic_learner.state = results.new_safety_critic_learning_state
+        self.penalizer.state = results.new_penalty_state
         return {
             "agent/actor/loss": results.actor_loss.item(),
             "agent/critic/loss": results.critic_loss.item(),
             "agent/safety_critic/loss": results.safety_critic_loss.item(),
             "agent/safety_critic/safe": float(results.safe.item()),
             "agent/safety_critic/constraint": results.constraint.item(),
-            "agent/safety_critic/debiased_safety": results.debiased_safety.item(),
-            "agent/lbsgd/lr": results.new_actor_learning_state[0].lr.item(),
-            "agent/lbsgd/eta": results.new_actor_learning_state[0].eta.item(),
+            "agent/safety_critic/safety": results.safety.item(),
+            **results.metrics,
         }
-
-
-class ActorLossOuts(NamedTuple):
-    trajectories: types.Prediction
-    lambda_values: jax.Array
-    safety_lambda_values: jax.Array
-    loss: jax.Array
-    constraint: jax.Array
-    safe: jax.Array
 
 
 class SafeActorCriticStepResults(NamedTuple):
@@ -132,10 +134,12 @@ class SafeActorCriticStepResults(NamedTuple):
     safety_critic_loss: jax.Array
     safe: jax.Array
     constraint: jax.Array
-    debiased_safety: jax.Array
+    safety: jax.Array
+    new_penalty_state: Any
+    metrics: dict[str, float]
 
 
-def actor_loss_fn(
+def evaluate_actor(
     actor: ac.ContinuousActor,
     critic: ac.Critic,
     safety_critic: ac.Critic,
@@ -147,8 +151,7 @@ def actor_loss_fn(
     safety_discount: float,
     lambda_: float,
     safety_budget: float,
-    eta: float,
-) -> tuple[jax.Array, ActorLossOuts]:
+) -> ActorEvaluation:
     loss, (trajectories, lambda_values) = ac.actor_loss_fn(
         actor, critic, rollout_fn, horizon, initial_states, key, discount, lambda_
     )
@@ -157,40 +160,18 @@ def actor_loss_fn(
         bootstrap_safety_values, trajectories.cost, safety_discount, lambda_
     )
     constraint = safety_budget - safety_lambda_values.mean()
-    loss -= eta * jnp.log(constraint + 1e-8)
-    outs = jnp.stack([loss, constraint])
-    return outs, ActorLossOuts(
+    objective = lambda_values.mean()
+    return ActorEvaluation(
         trajectories,
+        loss,
         lambda_values,
         safety_lambda_values,
-        loss,
+        objective,
         constraint,
         jnp.greater(constraint, 0.0),
     )
 
 
-def debias(values, budget):
-    return (budget - values) / budget
-
-
-def bias(values, budget):
-    return budget * (1.0 - values)
-
-
-def jacrev(f, has_aux=False):
-    def jacfn(x):
-        y, vjp_fn, aux = eqx.filter_vjp(f, x, has_aux=has_aux)
-        (J,) = eqx.filter_vmap(vjp_fn, in_axes=0)(jnp.eye(len(y)))
-        return J, aux
-
-    return jacfn
-
-
-# TODO (yarden): normalize safety budget to be between 0 and 1.
-# how? normalize the episodes's sum of cost with the budget?
-# make the target of the nueral network the relative error [(sum_t V_t - B ) / B]?
-# why? because it's better for the nn to predict things around in [0, 1]
-@eqx.filter_jit
 def safe_update_actor_critic(
     rollout_fn: types.RolloutFn,
     horizon: int,
@@ -209,14 +190,13 @@ def safe_update_actor_critic(
     safety_discount: float,
     lambda_: float,
     safety_budget: float,
-    eta: float,
-    backup_lr: float,
-):
+    penalty_fn: Penalizer,
+    penalty_state: Any,
+) -> SafeActorCriticStepResults:
     vmapped_rollout_fn = jax.vmap(rollout_fn, (None, 0, None, None))
-    # Take gradients with respect to the loss function and the constraint in one go.
-    jacobian, rest = jacrev(
-        lambda actor: actor_loss_fn(
-            actor,
+    actor_grads, new_penalty_state, evaluation, metrics = penalty_fn(
+        lambda a: evaluate_actor(
+            a,
             critic,
             safety_critic,
             vmapped_rollout_fn,
@@ -227,24 +207,22 @@ def safe_update_actor_critic(
             safety_discount,
             lambda_,
             safety_budget,
-            eta,
         ),
-        has_aux=True,
-    )(actor)
-    loss_grads, constraint_grads = pytrees_unstack(jacobian)
+        penalty_state,
+    )
     new_actor, new_actor_state = actor_learner.grad_step(
-        actor, (loss_grads, constraint_grads, rest.constraint), actor_learning_state
+        actor, actor_grads, actor_learning_state
     )
     critic_loss, grads = eqx.filter_value_and_grad(ac.critic_loss_fn)(
-        critic, rest.trajectories, rest.lambda_values
+        critic, evaluation.trajectories, evaluation.lambda_values
     )
     new_critic, new_critic_state = critic_learner.grad_step(
         critic, grads, critic_learning_state
     )
-    scaled_safety = rest.safety_lambda_values
+    scaled_safety = evaluation.safety_lambda_values
     safety_critic_loss, grads = eqx.filter_value_and_grad(ac.critic_loss_fn)(
         safety_critic,
-        rest.trajectories,
+        evaluation.trajectories,
         scaled_safety,
     )
     new_safety_critic, new_safety_critic_state = safety_critic_learner.grad_step(
@@ -257,10 +235,12 @@ def safe_update_actor_critic(
         new_actor_state,
         new_critic_state,
         new_safety_critic_state,
-        rest.loss,
+        evaluation.loss,
         critic_loss,
         safety_critic_loss,
-        rest.safe,
-        rest.constraint,
+        evaluation.safe,
+        evaluation.constraint,
         scaled_safety.mean(),
+        new_penalty_state,
+        metrics,
     )
