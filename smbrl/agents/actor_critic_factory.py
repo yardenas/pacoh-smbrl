@@ -2,10 +2,23 @@ import numpy as np
 
 from smbrl.agents.actor_critic import ModelBasedActorCritic
 from smbrl.agents.contextual_actor_critic import ContextualModelBasedActorCritic
+from smbrl.agents.lbsgd import LBSGDPenalizer, LBSGDState
 from smbrl.agents.safe_actor_critic import SafeModelBasedActorCritic
 from smbrl.agents.safe_contextual_actor_critic import (
     SafeContextualModelBasedActorCritic,
 )
+
+
+def make_penalizer(cfg):
+    if cfg.agent.penalizer.name == "lbsgd":
+        return (
+            LBSGDPenalizer(cfg.agent.m_0, cfg.agent.m_1, cfg.agent.eta_rate),
+            LBSGDState(cfg.eta),
+        )
+    elif cfg.agent.penalizer.name == "lagrangian":
+        raise NotImplementedError
+    else:
+        raise NotImplementedError
 
 
 def make_actor_critic(safe, contextual, state_dim, action_dim, cfg, key, belief=None):
@@ -21,6 +34,7 @@ def make_actor_critic(safe, contextual, state_dim, action_dim, cfg, key, belief=
             if cfg.agent.safety_discount < 1.0 - np.finfo(np.float32).eps
             else cfg.training.safety_budget
         )
+        penalizer, penalizer_state = make_penalizer(cfg)
         common_ins = dict(
             state_dim=state_dim,
             action_dim=action_dim,
@@ -33,11 +47,8 @@ def make_actor_critic(safe, contextual, state_dim, action_dim, cfg, key, belief=
             safety_discount=cfg.agent.safety_discount,
             lambda_=cfg.agent.lambda_,
             safety_budget=episode_safety_budget,
-            eta=cfg.agent.eta,
-            m_0=cfg.agent.m_0,
-            m_1=cfg.agent.m_1,
-            eta_rate=cfg.agent.eta_rate,
-            base_lr=cfg.agent.base_lr,
+            penalizer=penalizer,
+            penalizer_state=penalizer_state,
             key=key,
         )
     else:

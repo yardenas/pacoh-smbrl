@@ -1,3 +1,6 @@
+defaults:
+  - penalizer/lbsgd
+
 name: smbrl
 replay_buffer:
   batch_size: 32
@@ -29,11 +32,6 @@ model_optimizer:
   clip: 0.5
 discount: 0.99
 safety_discount: 0.99
-eta: 0.5
-m_0: 5e6
-m_1: 5e4
-eta_rate: 8e-6
-base_lr: 8e-5
 lambda_: 0.97
 plan_horizon: 15
 update_steps: 20

@@ -28,6 +28,7 @@ class Penalizer(Protocol):
         self,
         evaluate: Callable[[ac.ContinuousActor], ActorEvaluation],
         state: Any,
+        actor: ac.ContinuousActor,
     ) -> tuple[PyTree, Any, ActorEvaluation, dict[str, float]]:
         ...
 
@@ -209,6 +210,7 @@ def safe_update_actor_critic(
             safety_budget,
         ),
         penalty_state,
+        actor,
     )
     new_actor, new_actor_state = actor_learner.grad_step(
         actor, actor_grads, actor_learning_state
