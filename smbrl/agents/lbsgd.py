@@ -47,12 +47,12 @@ def lbsgd_update(
         lr = compute_lr(constraint, loss_grads, constraints_grads, m_0, m_1, eta_t)
         new_eta = eta_t / eta_rate
         updates = jax.tree_map(lambda x: x * lr, loss_grads)
-        return updates, LBSGDState(new_eta, lr)
+        return updates, LBSGDState(new_eta)
 
     def fallback():
         # Taking the negative gradient of the constraints to minimize the costs
         updates = jax.tree_map(lambda x: x * -1.0, constraints_grads)
-        return updates, LBSGDState(eta_t, 1.0)
+        return updates, LBSGDState(eta_t)
 
     loss_grads, constraints_grads, constraint = updates
     eta_t = state.eta
@@ -73,11 +73,11 @@ def jacrev(f, has_aux=False):
 
 
 class LBSGDPenalizer:
-    def __init__(self, m_0, m_1, eta_rate) -> None:
+    def __init__(self, m_0, m_1, eta, eta_rate) -> None:
         self.m_0 = m_0
         self.m_1 = m_1
-        self.eta_rate = eta_rate
-        self.state = None
+        self.eta_rate = eta_rate + 1.0
+        self.state = LBSGDState(eta)
 
     def __call__(
         self,
