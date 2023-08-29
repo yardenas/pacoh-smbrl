@@ -87,7 +87,7 @@ class LBSGDPenalizer:
     ) -> tuple[PyTree, Any, ActorEvaluation, dict[str, float]]:
         def evaluate_helper(actor):
             evaluation = evaluate(actor)
-            outs = jnp.stack([-evaluation.objective, evaluation.constraint])
+            outs = jnp.stack([evaluation.loss, evaluation.constraint])
             return outs, evaluation
 
         jacobian, rest = jacrev(evaluate_helper, has_aux=True)(actor)
@@ -100,6 +100,6 @@ class LBSGDPenalizer:
             self.m_1,
         )
         metrics = {
-            "agent/lbsgd/eta": state.eta.item(),
+            "agent/lbsgd/eta": state.eta,
         }
         return updates, state, rest, metrics

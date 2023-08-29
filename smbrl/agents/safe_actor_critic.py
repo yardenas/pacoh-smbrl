@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Any, Callable, NamedTuple, Protocol
 
 import equinox as eqx
@@ -16,7 +17,6 @@ class ActorEvaluation(NamedTuple):
     loss: jax.Array
     lambda_values: jax.Array
     safety_lambda_values: jax.Array
-    objective: jax.Array
     constraint: jax.Array
     safe: jax.Array
 
@@ -29,7 +29,7 @@ class Penalizer(Protocol):
         evaluate: Callable[[ac.ContinuousActor], ActorEvaluation],
         state: Any,
         actor: ac.ContinuousActor,
-    ) -> tuple[PyTree, Any, ActorEvaluation, dict[str, float]]:
+    ) -> tuple[PyTree, Any, ActorEvaluation, dict[str, jax.Array]]:
         ...
 
 
@@ -84,8 +84,8 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
         initial_states: jax.Array,
         key: jax.random.KeyArray,
     ) -> dict[str, float]:
-        results: SafeActorCriticStepResults = self.update_fn(
-            model.sample,
+        actor_critic_fn = partial(self.update_fn, model.sample)
+        results: SafeActorCriticStepResults = actor_critic_fn(
             self.horizon,
             initial_states,
             self.actor,
@@ -119,7 +119,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             "agent/safety_critic/safe": float(results.safe.item()),
             "agent/safety_critic/constraint": results.constraint.item(),
             "agent/safety_critic/safety": results.safety.item(),
-            **results.metrics,
+            **{k: v.item() for k, v in results.metrics.items()},
         }
 
 
@@ -137,7 +137,7 @@ class SafeActorCriticStepResults(NamedTuple):
     constraint: jax.Array
     safety: jax.Array
     new_penalty_state: Any
-    metrics: dict[str, float]
+    metrics: dict[str, jax.Array]
 
 
 def evaluate_actor(
@@ -161,18 +161,17 @@ def evaluate_actor(
         bootstrap_safety_values, trajectories.cost, safety_discount, lambda_
     )
     constraint = safety_budget - safety_lambda_values.mean()
-    objective = lambda_values.mean()
     return ActorEvaluation(
         trajectories,
         loss,
         lambda_values,
         safety_lambda_values,
-        objective,
         constraint,
         jnp.greater(constraint, 0.0),
     )
 
 
+@eqx.filter_jit
 def safe_update_actor_critic(
     rollout_fn: types.RolloutFn,
     horizon: int,
