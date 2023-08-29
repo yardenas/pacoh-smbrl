@@ -1,6 +1,7 @@
 import numpy as np
 
 from smbrl.agents.actor_critic import ModelBasedActorCritic
+from smbrl.agents.augmented_lagrangian import AugmentedLagrangianPenalizer
 from smbrl.agents.contextual_actor_critic import ContextualModelBasedActorCritic
 from smbrl.agents.lbsgd import LBSGDPenalizer
 from smbrl.agents.safe_actor_critic import SafeModelBasedActorCritic
@@ -18,7 +19,11 @@ def make_penalizer(cfg):
             cfg.agent.penalizer.eta_rate,
         )
     elif cfg.agent.penalizer.name == "lagrangian":
-        raise NotImplementedError
+        return AugmentedLagrangianPenalizer(
+            cfg.agent.penalizer.initial_lagrangian,
+            cfg.agent.penalizer.initial_multiplier,
+            cfg.agent.penalizer.multiplier_factor,
+        )
     else:
         raise NotImplementedError
 

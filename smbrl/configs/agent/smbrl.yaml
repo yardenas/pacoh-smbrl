@@ -1,5 +1,5 @@
 defaults:
-  - penalizer/lbsgd
+  - penalizer/lagrangian
 
 name: smbrl
 replay_buffer:
