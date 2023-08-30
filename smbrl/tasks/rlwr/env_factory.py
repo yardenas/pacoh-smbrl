@@ -115,7 +115,7 @@ def make_env_factory(cfg):
             domain_name,
             task_cfg.task,
             augment_constraint(task_cfg.safety_spec, domain_name, task_cfg.constraints),
-            {"enable": False, "period": 0, "scheduler": "constant"},
+            task_cfg.perturb_spec,
         )
         # Make `Base._generate_parameter` a no-op function. This allows calls to
         # `update_physics` to bypass the paramerter sampling and use the
