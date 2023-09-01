@@ -1,6 +1,6 @@
 name: lagrangian
-initial_lagrangian: 1e-6
-initial_multiplier: 5e-9
+initial_lagrangian: 1e-5
+initial_multiplier: 5e-8
 multiplier_factor: 1e-5
 
 
