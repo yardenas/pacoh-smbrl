@@ -9,6 +9,7 @@ from omegaconf import DictConfig
 
 from smbrl import metrics as m
 from smbrl.agents import rssm
+from smbrl.agents.actor_critic import discounted_cumsum
 from smbrl.agents.actor_critic_factory import make_actor_critic
 from smbrl.agents.base import AgentBase
 from smbrl.logging import TrainingLogger
@@ -58,6 +59,7 @@ class SMBRL(AgentBase):
     ):
         super().__init__(config, logger)
         self.obs_normalizer = m.MetricsAccumulator()
+        self.cost_normalizer = m.MetricsAccumulator()
         self.replay_buffer = ReplayBuffer(
             observation_shape=observation_space.shape,
             action_shape=action_space.shape,
@@ -120,6 +122,12 @@ class SMBRL(AgentBase):
             ),
             axis=(0, 1),
         )
+        self.cost_normalizer.update_state(
+            eqx.filter_vmap(eqx.filter_vmap(discounted_cumsum))(
+                trajectory.cost, self.config.agent.discount
+            ),
+            axis=(0, 1),
+        )
         add_to_buffer(
             self.replay_buffer,
             trajectory,
@@ -134,7 +142,12 @@ class SMBRL(AgentBase):
             initial_states = inferrered_rssm_states.reshape(
                 -1, inferrered_rssm_states.shape[-1]
             )
-            outs = self.actor_critic.update(self.model, initial_states, next(self.prng))
+            outs = self.actor_critic.update(
+                self.model,
+                initial_states,
+                next(self.prng),
+                self.cost_normalizer.result.mean,
+            )
             for k, v in outs.items():
                 self.logger[k] = v
 
