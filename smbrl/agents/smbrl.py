@@ -123,7 +123,7 @@ class SMBRL(AgentBase):
             axis=(0, 1),
         )
         self.cost_normalizer.update_state(
-            eqx.filter_vmap(eqx.filter_vmap(discounted_cumsum))(
+            eqx.filter_vmap(discounted_cumsum)(
                 trajectory.cost, self.config.agent.discount
             ),
             axis=(0, 1),
