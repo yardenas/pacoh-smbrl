@@ -83,7 +83,6 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
         model: types.Model,
         initial_states: jax.Array,
         key: jax.random.KeyArray,
-        cost_normalizer: float,
     ) -> dict[str, float]:
         actor_critic_fn = partial(self.update_fn, model.sample)
         results: SafeActorCriticStepResults = actor_critic_fn(
@@ -105,7 +104,6 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             self.safety_budget,
             self.penalizer,
             self.penalizer.state,
-            cost_normalizer,
         )
         self.actor = results.new_actor
         self.critic = results.new_critic
@@ -154,17 +152,13 @@ def evaluate_actor(
     safety_discount: float,
     lambda_: float,
     safety_budget: float,
-    cost_normalizer: float,
 ) -> ActorEvaluation:
     loss, (trajectories, lambda_values) = ac.actor_loss_fn(
         actor, critic, rollout_fn, horizon, initial_states, key, discount, lambda_
     )
     bootstrap_safety_values = jax.vmap(jax.vmap(safety_critic))(trajectories.next_state)
     safety_lambda_values = eqx.filter_vmap(ac.compute_lambda_values)(
-        bootstrap_safety_values * cost_normalizer,
-        trajectories.cost,
-        safety_discount,
-        lambda_,
+        bootstrap_safety_values, trajectories.cost, safety_discount, lambda_
     )
     constraint = safety_budget - safety_lambda_values.mean()
     return ActorEvaluation(
@@ -198,7 +192,6 @@ def safe_update_actor_critic(
     safety_budget: float,
     penalty_fn: Penalizer,
     penalty_state: Any,
-    cost_normalizer: float,
 ) -> SafeActorCriticStepResults:
     vmapped_rollout_fn = jax.vmap(rollout_fn, (None, 0, None, None))
     actor_grads, new_penalty_state, evaluation, metrics = penalty_fn(
@@ -214,7 +207,6 @@ def safe_update_actor_critic(
             safety_discount,
             lambda_,
             safety_budget,
-            cost_normalizer,
         ),
         penalty_state,
         actor,
@@ -228,7 +220,7 @@ def safe_update_actor_critic(
     new_critic, new_critic_state = critic_learner.grad_step(
         critic, grads, critic_learning_state
     )
-    scaled_safety = evaluation.safety_lambda_values / cost_normalizer
+    scaled_safety = evaluation.safety_lambda_values
     safety_critic_loss, grads = eqx.filter_value_and_grad(ac.critic_loss_fn)(
         safety_critic,
         evaluation.trajectories,

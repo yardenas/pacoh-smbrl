@@ -44,8 +44,7 @@ def lbsgd_update(
     state: LBSGDState, updates: PyTree, eta_rate: float, m_0: float, m_1: float
 ) -> tuple[PyTree, LBSGDState]:
     def happy_case():
-        # lr = compute_lr(constraint, loss_grads, constraints_grads, m_0, m_1, eta_t)
-        lr = 1.0
+        lr = compute_lr(constraint, loss_grads, constraints_grads, m_0, m_1, eta_t)
         new_eta = eta_t / eta_rate
         updates = jax.tree_map(lambda x: x * lr, loss_grads)
         return updates, LBSGDState(new_eta)
