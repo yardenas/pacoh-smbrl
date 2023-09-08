@@ -40,7 +40,7 @@ def make_actor_critic(safe, contextual, state_dim, action_dim, cfg, key, belief=
             )
             if cfg.agent.safety_discount < 1.0 - np.finfo(np.float32).eps
             else cfg.training.safety_budget
-        )
+        ) + cfg.agent.safety_slack
         penalizer = make_penalizer(cfg)
         common_ins = dict(
             state_dim=state_dim,
