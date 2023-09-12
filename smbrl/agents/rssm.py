@@ -377,7 +377,7 @@ def kl_divergence(
     else:
         prior_dist = dtx.MultivariateNormalDiag(*prior)
         posterior_dist = dtx.MultivariateNormalDiag(*posterior)
-    dynamic_kl = jax.lax.stop_gradient(posterior_dist).kl_divergence(prior_dist)
+    dynamic_kl = sg(posterior_dist).kl_divergence(prior_dist)
     representation_kl = posterior_dist.kl_divergence(jax.lax.stop_gradient(prior_dist))
     clip = lambda x: jnp.maximum(x, free_nats)
     dynamic_kl, representation_kl = clip(dynamic_kl), clip(representation_kl)
