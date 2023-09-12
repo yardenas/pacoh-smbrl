@@ -347,7 +347,7 @@ def variational_step(
         infer_fn = lambda features, actions: model(features, actions, key)
         states, y_hat, posteriors, priors = eqx.filter_vmap(infer_fn)(features, actions)
         y = jnp.concatenate([features.observation, features.reward, features.cost], -1)
-        reconstruction_loss = dtx.MultivariateNormalDiag(y).log_prob(y_hat).mean()
+        reconstruction_loss = -dtx.MultivariateNormalDiag(y).log_prob(y_hat).mean()
         dynamic_kl, representation_kl = kl_divergence(
             posteriors, priors, free_nats, discrete
         )
