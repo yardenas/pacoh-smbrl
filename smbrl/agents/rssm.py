@@ -1,11 +1,12 @@
 from typing import NamedTuple, Optional
 
 import distrax as dtx
+from distrax._src.distributions.one_hot_categorical import Array, PRNGKey
 import equinox as eqx
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
-from optax import OptState, l2_loss
+from optax import OptState
 
 from smbrl.types import Policy, Prediction
 from smbrl.utils import Learner
@@ -50,6 +51,23 @@ class ShiftScale(NamedTuple):
 
 
 Logits = jax.Array
+sg = jax.lax.stop_gradient
+
+
+# https://github.com/danijar/dreamerv3/blob/main/dreamerv3/jaxutils.py#L77
+class OneHotDist(dtx.OneHotCategorical):
+    def __init__(self, logits=None, probs=None, dtype=jnp.float32):
+        super().__init__(logits, probs, dtype)
+
+    def _sample_n(self, key: PRNGKey, n: int) -> Array:
+        sample = sg(super()._sample_n(key, n))
+        probs = self._pad(super().probs, sample.shape)
+        return sg(sample) + (probs - sg(probs)).astype(sample.dtype)
+
+    def _pad(self, tensor, shape):
+        while len(tensor.shape) < len(shape):
+            tensor = tensor[None]
+        return tensor
 
 
 class Prior(eqx.Module):
@@ -57,6 +75,7 @@ class Prior(eqx.Module):
     encoder: eqx.nn.Linear
     decoder1: eqx.nn.Linear
     decoder2: eqx.nn.Linear
+    discrete: bool = eqx.static_field()
 
     def __init__(
         self,
@@ -65,6 +84,7 @@ class Prior(eqx.Module):
         hidden_size: int,
         action_dim: int,
         key: jax.random.KeyArray,
+        discrete: bool = True,
     ):
         encoder_key, cell_key, decoder1_key, decoder2_key = jax.random.split(key, 4)
         self.encoder = eqx.nn.Linear(
@@ -72,9 +92,9 @@ class Prior(eqx.Module):
         )
         self.cell = eqx.nn.GRUCell(deterministic_size, deterministic_size, key=cell_key)
         self.decoder1 = eqx.nn.Linear(deterministic_size, hidden_size, key=decoder1_key)
-        self.decoder2 = eqx.nn.Linear(
-            hidden_size, stochastic_size * 2, key=decoder2_key
-        )
+        out_size = stochastic_size if discrete else 2 * stochastic_size
+        self.decoder2 = eqx.nn.Linear(hidden_size, out_size, key=decoder2_key)
+        self.discrete = discrete
 
     def __call__(
         self, prev_state: State, action: jax.Array
@@ -84,14 +104,18 @@ class Prior(eqx.Module):
         hidden = self.cell(x, prev_state.deterministic)
         x = jnn.elu(self.decoder1(hidden))
         x = self.decoder2(x)
-        mu, stddev = jnp.split(x, 2, -1)
-        stddev = jnn.softplus(stddev) + 0.1
-        return ShiftScale(mu, stddev), hidden
+        if not self.discrete:
+            mu, stddev = jnp.split(x, 2, -1)
+            stddev = jnn.softplus(stddev) + 0.1
+            return ShiftScale(mu, stddev), hidden
+        else:
+            return x, hidden
 
 
 class Posterior(eqx.Module):
     encoder: eqx.nn.Linear
     decoder: eqx.nn.Linear
+    discrete: bool = eqx.static_field()
 
     def __init__(
         self,
@@ -100,20 +124,26 @@ class Posterior(eqx.Module):
         hidden_size: int,
         embedding_size: int,
         key: jax.random.KeyArray,
+        discrete: bool = True,
     ):
         encoder_key, decoder_key = jax.random.split(key)
         self.encoder = eqx.nn.Linear(
             deterministic_size + embedding_size, hidden_size, key=encoder_key
         )
-        self.decoder = eqx.nn.Linear(hidden_size, stochastic_size * 2, key=decoder_key)
+        out_size = stochastic_size if discrete else 2 * stochastic_size
+        self.decoder = eqx.nn.Linear(hidden_size, out_size, key=decoder_key)
+        self.discrete = discrete
 
     def __call__(self, prev_state: State, embedding: jax.Array) -> ShiftScale | Logits:
         x = jnp.concatenate([prev_state.deterministic, embedding], -1)
         x = jnn.elu(self.encoder(x))
         x = self.decoder(x)
-        mu, stddev = jnp.split(x, 2, -1)
-        stddev = jnn.softplus(stddev) + 0.1
-        return ShiftScale(mu, stddev)
+        if not self.discrete:
+            mu, stddev = jnp.split(x, 2, -1)
+            stddev = jnn.softplus(stddev) + 0.1
+            return ShiftScale(mu, stddev)
+        else:
+            return x
 
 
 class RSSM(eqx.Module):
@@ -121,6 +151,7 @@ class RSSM(eqx.Module):
     posterior: Posterior
     deterministic_size: int = eqx.static_field()
     stochastic_size: int = eqx.static_field()
+    discrete: bool = eqx.static_field()
 
     def __init__(
         self,
@@ -130,6 +161,7 @@ class RSSM(eqx.Module):
         embedding_size: int,
         action_dim: int,
         key: jax.random.KeyArray,
+        discrete: bool = True,
     ):
         prior_key, posterior_key = jax.random.split(key)
         self.prior = Prior(
@@ -138,6 +170,7 @@ class RSSM(eqx.Module):
             hidden_size,
             action_dim,
             prior_key,
+            discrete,
         )
         self.posterior = Posterior(
             deterministic_size,
@@ -145,15 +178,20 @@ class RSSM(eqx.Module):
             hidden_size,
             embedding_size,
             posterior_key,
+            discrete,
         )
         self.deterministic_size = deterministic_size
         self.stochastic_size = stochastic_size
+        self.discrete = discrete
 
     def predict(
         self, prev_state: State, action: jax.Array, key: jax.random.KeyArray
     ) -> State:
         prior, deterministic = self.prior(prev_state, action)
-        stochastic = dtx.Normal(*prior).sample(seed=key)
+        if self.discrete:
+            stochastic = OneHotDist(prior).sample(seed=key)
+        else:
+            stochastic = dtx.Normal(*prior).sample(seed=key)
         return State(stochastic, deterministic)
 
     def filter(
@@ -166,7 +204,10 @@ class RSSM(eqx.Module):
         prior, deterministic = self.prior(prev_state, action)
         state = State(prev_state.stochastic, deterministic)
         posterior = self.posterior(state, embeddings)
-        stochastic = dtx.Normal(*posterior).sample(seed=key)
+        if self.discrete:
+            stochastic = OneHotDist(posterior).sample(seed=key)
+        else:
+            stochastic = dtx.Normal(*posterior).sample(seed=key)
         return State(stochastic, deterministic), posterior, prior
 
     @property
@@ -180,6 +221,7 @@ class WorldModel(eqx.Module):
     cell: RSSM
     encoder: eqx.nn.Linear
     decoder: eqx.nn.Linear
+    discrete: bool = eqx.static_field()
 
     def __init__(
         self,
@@ -188,6 +230,7 @@ class WorldModel(eqx.Module):
         deterministic_size: int,
         stochastic_size: int,
         hidden_size: int,
+        discrete: bool,
         *,
         key,
     ):
@@ -199,12 +242,14 @@ class WorldModel(eqx.Module):
             hidden_size,
             action_dim,
             cell_key,
+            discrete,
         )
         self.encoder = eqx.nn.Linear(state_dim, hidden_size, key=encoder_key)
         # 1 + 1 = cost + reward
         self.decoder = eqx.nn.Linear(
             deterministic_size + stochastic_size, state_dim + 1 + 1, key=decoder_key
         )
+        self.discrete = discrete
 
     def __call__(
         self,
@@ -255,7 +300,7 @@ class WorldModel(eqx.Module):
             if callable_policy:
                 key = inputs
                 key, p_key = jax.random.split(key)
-                action = policy(jax.lax.stop_gradient(prev_state.flatten()), p_key)
+                action = policy(sg(prev_state.flatten()), p_key)
             else:
                 action, key = inputs
             state = self.cell.predict(prev_state, action, key)
@@ -296,13 +341,16 @@ def variational_step(
     representation_scale: float,
     beta: float = 1.0,
     free_nats: float = 0.0,
+    discrete: bool = True,
 ):
     def loss_fn(model):
         infer_fn = lambda features, actions: model(features, actions, key)
         states, y_hat, posteriors, priors = eqx.filter_vmap(infer_fn)(features, actions)
         y = jnp.concatenate([features.observation, features.reward, features.cost], -1)
         reconstruction_loss = dtx.MultivariateNormalDiag(y).log_prob(y_hat).mean()
-        dynamic_kl, representation_kl = kl_divergence(posteriors, priors, free_nats)
+        dynamic_kl, representation_kl = kl_divergence(
+            posteriors, priors, free_nats, discrete
+        )
         kl_loss = dynamic_scale * dynamic_kl + representation_scale * representation_kl
         kl_loss = kl_loss.mean()
         aux = dict(
@@ -321,9 +369,14 @@ def kl_divergence(
     posterior: ShiftScale,
     prior: ShiftScale,
     free_nats: float = 0.0,
+    discrete: bool = True,
 ) -> tuple[jax.Array, jax.Array]:
-    prior_dist = dtx.MultivariateNormalDiag(*prior)
-    posterior_dist = dtx.MultivariateNormalDiag(*posterior)
+    if discrete:
+        prior_dist = OneHotDist(prior)
+        posterior_dist = OneHotDist(posterior)
+    else:
+        prior_dist = dtx.MultivariateNormalDiag(*prior)
+        posterior_dist = dtx.MultivariateNormalDiag(*posterior)
     dynamic_kl = jax.lax.stop_gradient(posterior_dist).kl_divergence(prior_dist)
     representation_kl = posterior_dist.kl_divergence(jax.lax.stop_gradient(prior_dist))
     clip = lambda x: jnp.maximum(x, free_nats)

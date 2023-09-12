@@ -151,6 +151,7 @@ class SMBRL(AgentBase):
             self.config.agent.representation_scale,
             self.config.agent.beta,
             self.config.agent.free_nats,
+            self.config.agent.model.discrete
         )
         self.logger["agent/model/loss"] = float(loss.mean())
         self.logger["agent/model/reconstruction"] = float(

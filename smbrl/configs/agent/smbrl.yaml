@@ -11,6 +11,7 @@ model:
   stochastic_size: 64
   deterministic_size: 128
   hidden_size: 128
+  discrete: true
 actor:
   n_layers: 4
   hidden_size: 400
