@@ -147,6 +147,8 @@ class SMBRL(AgentBase):
             self.model_learner,
             self.model_learner.state,
             next(self.prng),
+            self.config.agent.dynamic_scale,
+            self.config.agent.representation_scale,
             self.config.agent.beta,
             self.config.agent.free_nats,
         )

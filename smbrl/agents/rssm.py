@@ -49,6 +49,9 @@ class ShiftScale(NamedTuple):
     scale: jax.Array
 
 
+Logits = jax.Array
+
+
 class Prior(eqx.Module):
     cell: eqx.nn.GRUCell
     encoder: eqx.nn.Linear
@@ -75,7 +78,7 @@ class Prior(eqx.Module):
 
     def __call__(
         self, prev_state: State, action: jax.Array
-    ) -> tuple[dtx.Normal, jax.Array]:
+    ) -> tuple[ShiftScale | Logits, jax.Array]:
         x = jnp.concatenate([prev_state.stochastic, action], -1)
         x = jnn.elu(self.encoder(x))
         hidden = self.cell(x, prev_state.deterministic)
@@ -104,7 +107,7 @@ class Posterior(eqx.Module):
         )
         self.decoder = eqx.nn.Linear(hidden_size, stochastic_size * 2, key=decoder_key)
 
-    def __call__(self, prev_state: State, embedding: jax.Array):
+    def __call__(self, prev_state: State, embedding: jax.Array) -> ShiftScale | Logits:
         x = jnp.concatenate([prev_state.deterministic, embedding], -1)
         x = jnn.elu(self.encoder(x))
         x = self.decoder(x)
@@ -289,6 +292,8 @@ def variational_step(
     learner: Learner,
     opt_state: OptState,
     key: jax.random.KeyArray,
+    dynamic_scale: float,
+    representation_scale: float,
     beta: float = 1.0,
     free_nats: float = 0.0,
 ):
@@ -296,12 +301,13 @@ def variational_step(
         infer_fn = lambda features, actions: model(features, actions, key)
         states, y_hat, posteriors, priors = eqx.filter_vmap(infer_fn)(features, actions)
         y = jnp.concatenate([features.observation, features.reward, features.cost], -1)
-        reconstruction_loss = l2_loss(y_hat, y).mean()
-        dynamics_kl_loss = kl_divergence(posteriors, priors, free_nats).mean()
-        kl_loss = dynamics_kl_loss
+        reconstruction_loss = dtx.MultivariateNormalDiag(y).log_prob(y_hat).mean()
+        dynamic_kl, representation_kl = kl_divergence(posteriors, priors, free_nats)
+        kl_loss = dynamic_scale * dynamic_kl + representation_scale * representation_kl
+        kl_loss = kl_loss.mean()
         aux = dict(
             reconstruction_loss=reconstruction_loss,
-            kl_loss=dynamics_kl_loss,
+            kl_loss=kl_loss,
             states=states,
         )
         return reconstruction_loss + beta * kl_loss, aux
@@ -312,8 +318,14 @@ def variational_step(
 
 
 def kl_divergence(
-    posterior: ShiftScale, prior: ShiftScale, free_nats: float = 0.0
-) -> jax.Array:
+    posterior: ShiftScale,
+    prior: ShiftScale,
+    free_nats: float = 0.0,
+) -> tuple[jax.Array, jax.Array]:
     prior_dist = dtx.MultivariateNormalDiag(*prior)
     posterior_dist = dtx.MultivariateNormalDiag(*posterior)
-    return jnp.maximum(posterior_dist.kl_divergence(prior_dist), free_nats)
+    dynamic_kl = jax.lax.stop_gradient(posterior_dist).kl_divergence(prior_dist)
+    representation_kl = posterior_dist.kl_divergence(jax.lax.stop_gradient(prior_dist))
+    clip = lambda x: jnp.maximum(x, free_nats)
+    dynamic_kl, representation_kl = clip(dynamic_kl), clip(representation_kl)
+    return dynamic_kl, representation_kl

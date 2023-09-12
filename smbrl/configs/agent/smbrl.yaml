@@ -37,5 +37,7 @@ plan_horizon: 15
 update_steps: 20
 train_every: 10
 beta: 0.0001
+dynamic_scale: 0.5
+representation_scale: 0.1
 free_nats: 1.
 safety_slack: 1.
