@@ -42,6 +42,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
         critic_config: dict[str, Any],
         actor_optimizer_config: dict[str, Any],
         critic_optimizer_config: dict[str, Any],
+        safety_critic_optimizer_config: dict[str, Any],
         horizon: int,
         discount: float,
         safety_discount: float,
@@ -67,7 +68,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
             state_dim=state_dim, **critic_config, key=critic_key
         )
         self.safety_critic_learner = Learner(
-            self.safety_critic, critic_optimizer_config
+            self.safety_critic, safety_critic_optimizer_config
         )
         self.actor_learner = Learner(
             self.actor,

@@ -26,6 +26,10 @@ critic_optimizer:
   lr: 8e-5
   eps: 1e-5
   clip: 0.5
+safety_critic_optimizer:
+  lr: 0.0005
+  eps: 1e-5
+  clip: 0.5
 model_optimizer:
   lr: 3e-4
   eps: 1e-5
