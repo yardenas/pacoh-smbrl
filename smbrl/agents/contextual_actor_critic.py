@@ -89,41 +89,10 @@ class ContextualModelBasedActorCritic(ac.ModelBasedActorCritic):
         )
         self.actor_learner = Learner(self.actor, actor_optimizer_config)
         self.critic_learner = Learner(self.critic, critic_optimizer_config)
-        self.belief = belief
         self.update_fn = contextual_update_actor_critic
 
-    def update(
-        self,
-        model: types.Model,
-        initial_states: jax.Array,
-        key: jax.random.KeyArray,
-    ) -> dict[str, float]:
-        actor_critic_fn = partial(self.update_fn, model.sample)
-        results = actor_critic_fn(
-            self.horizon,
-            initial_states,
-            self.actor,
-            self.critic,
-            self.actor_learner.state,
-            self.critic_learner.state,
-            self.actor_learner,
-            self.critic_learner,
-            key,
-            self.discount,
-            self.lambda_,
-            self.belief,
-        )
-        self.actor = results.new_actor
-        self.critic = results.new_critic
-        self.actor_learner.state = results.new_actor_learning_state
-        self.critic_learner.state = results.new_critic_learning_state
-        return {
-            "agent/actor/loss": results.actor_loss.item(),
-            "agent/critic/loss": results.critic_loss.item(),
-        }
-
     def contextualize(self, belief: maki.ShiftScale):
-        self.belief = belief
+        self.update_fn = partial(contextual_update_actor_critic, context=belief)
 
 
 class ContextualRolloutFn(Protocol):
