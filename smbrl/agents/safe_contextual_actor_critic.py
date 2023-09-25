@@ -12,7 +12,7 @@ from smbrl.utils import Learner
 
 
 class SafeContextualModelBasedActorCritic(
-    sac.SafeModelBasedActorCritic, cac.ContextualContinuousActor
+    sac.SafeModelBasedActorCritic, cac.ContextualModelBasedActorCritic
 ):
     def __init__(
         self,

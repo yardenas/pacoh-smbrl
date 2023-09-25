@@ -70,10 +70,6 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
         self.safety_critic_learner = Learner(
             self.safety_critic, safety_critic_optimizer_config
         )
-        self.actor_learner = Learner(
-            self.actor,
-            actor_optimizer_config,
-        )
         self.safety_discount = safety_discount
         self.safety_budget = safety_budget
         self.update_fn = safe_update_actor_critic
