@@ -11,9 +11,7 @@ from smbrl.agents import safe_actor_critic as sac
 from smbrl.utils import Learner
 
 
-class SafeContextualModelBasedActorCritic(
-    sac.SafeModelBasedActorCritic, cac.ContextualModelBasedActorCritic
-):
+class SafeContextualModelBasedActorCritic(sac.SafeModelBasedActorCritic):
     def __init__(
         self,
         state_dim: int,
@@ -48,7 +46,7 @@ class SafeContextualModelBasedActorCritic(
             penalizer=penalizer,
             key=key,
         )
-        actor_key, critic_key = jax.random.split(key, 3)
+        actor_key, critic_key, safety_critic_key = jax.random.split(key, 3)
         context_size = belief.shift.shape[-1]
         self.actor = cac.ContextualContinuousActor(
             state_dim=state_dim + context_size * 2,
@@ -59,13 +57,14 @@ class SafeContextualModelBasedActorCritic(
         self.critic = cac.ContextualCritic(
             state_dim=state_dim + context_size, **critic_config, key=critic_key
         )
+        self.critic_learner = Learner(self.critic, critic_optimizer_config)
         self.safety_critic = cac.ContextualCritic(
-            state_dim=state_dim, **critic_config, key=critic_key
+            state_dim=state_dim + context_size, **critic_config, key=safety_critic_key
         )
         self.safety_critic_learner = Learner(
-            self.safety_critic, critic_optimizer_config
+            self.safety_critic, safety_critic_optimizer_config
         )
-        self.update_fn = safe_contextual_update_actor_critic
+        self.update_fn = None
 
     def contextualize(self, belief: maki.ShiftScale):
         self.update_fn = partial(safe_contextual_update_actor_critic, context=belief)
@@ -90,8 +89,8 @@ def safe_contextual_update_actor_critic(
     safety_discount: float,
     lambda_: float,
     safety_budget: float,
-    eta: float,
-    backup_lr: float,
+    penalty_fn: sac.Penalizer,
+    penalty_state: Any,
     context: maki.ShiftScale,
 ):
     vmapped_rollout_fn = jax.vmap(rollout_fn, (None, 0, None, None, 0))
@@ -116,6 +115,6 @@ def safe_contextual_update_actor_critic(
         safety_discount,
         lambda_,
         safety_budget,
-        eta,
-        backup_lr,
+        penalty_fn,
+        penalty_state,
     )

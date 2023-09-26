@@ -72,7 +72,7 @@ class SafeModelBasedActorCritic(ac.ModelBasedActorCritic):
         )
         self.safety_discount = safety_discount
         self.safety_budget = safety_budget
-        self.update_fn = safe_update_actor_critic
+        self.update_fn = vanilla_safe_update_actor_critic
         self.penalizer = penalizer
 
     def update(
@@ -190,13 +190,12 @@ def safe_update_actor_critic(
     penalty_fn: Penalizer,
     penalty_state: Any,
 ) -> SafeActorCriticStepResults:
-    vmapped_rollout_fn = jax.vmap(rollout_fn, (None, 0, None, None))
     actor_grads, new_penalty_state, evaluation, metrics = penalty_fn(
         lambda a: evaluate_actor(
             a,
             critic,
             safety_critic,
-            vmapped_rollout_fn,
+            rollout_fn,
             horizon,
             initial_states,
             key,
@@ -241,4 +240,50 @@ def safe_update_actor_critic(
         scaled_safety.mean(),
         new_penalty_state,
         metrics,
+    )
+
+
+@eqx.filter_jit
+def vanilla_safe_update_actor_critic(
+    rollout_fn: types.RolloutFn,
+    horizon: int,
+    initial_states: jax.Array,
+    actor: ac.ContinuousActor,
+    critic: ac.Critic,
+    safety_critic: ac.Critic,
+    actor_learning_state: OptState,
+    critic_learning_state: OptState,
+    safety_critic_learning_state: OptState,
+    actor_learner: Learner,
+    critic_learner: Learner,
+    safety_critic_learner: Learner,
+    key: jax.random.KeyArray,
+    discount: float,
+    safety_discount: float,
+    lambda_: float,
+    safety_budget: float,
+    penalty_fn: Penalizer,
+    penalty_state: Any,
+) -> SafeActorCriticStepResults:
+    vmapped_rollout_fn = jax.vmap(rollout_fn, (None, 0, None, None))
+    return safe_update_actor_critic(
+        vmapped_rollout_fn,
+        horizon,
+        initial_states,
+        actor,
+        critic,
+        safety_critic,
+        actor_learning_state,
+        critic_learning_state,
+        safety_critic_learning_state,
+        actor_learner,
+        critic_learner,
+        safety_critic_learner,
+        key,
+        discount,
+        safety_discount,
+        lambda_,
+        safety_budget,
+        penalty_fn,
+        penalty_state,
     )

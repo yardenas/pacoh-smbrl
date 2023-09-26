@@ -89,7 +89,7 @@ class ContextualModelBasedActorCritic(ac.ModelBasedActorCritic):
         )
         self.actor_learner = Learner(self.actor, actor_optimizer_config)
         self.critic_learner = Learner(self.critic, critic_optimizer_config)
-        self.update_fn = contextual_update_actor_critic
+        self.update_fn = None
 
     def contextualize(self, belief: maki.ShiftScale):
         self.update_fn = partial(contextual_update_actor_critic, context=belief)
