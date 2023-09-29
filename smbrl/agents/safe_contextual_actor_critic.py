@@ -54,6 +54,7 @@ class SafeContextualModelBasedActorCritic(sac.SafeModelBasedActorCritic):
             **actor_config,
             key=actor_key,
         )
+        self.actor_learner = Learner(self.actor, actor_optimizer_config)
         self.critic = cac.ContextualCritic(
             state_dim=state_dim + context_size, **critic_config, key=critic_key
         )
