@@ -12,7 +12,7 @@ model:
   hidden_size: 128
   intermediate_size: 512
   num_heads: 2
-  context_size: 1
+  context_size: 64
   stochastic_size: 64
   deterministic_size: 128
 actor:
