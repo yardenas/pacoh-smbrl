@@ -24,6 +24,7 @@ class Trainer:
         start_epoch: int = 0,
         step: int = 0,
         seeds: Optional[List[int]] = None,
+        resume_path: Optional[str] = None,
     ):
         self.config = config
         self.agent = agent
@@ -35,9 +36,10 @@ class Trainer:
         self.logger: Optional[rllogging.TrainingLogger] = None
         self.state_writer: Optional[rllogging.StateWriter] = None
         self.env: Optional[episodic_async_env.EpisodicAsync] = None
+        self.resume_path = resume_path
 
     def __enter__(self):
-        log_path = os.getcwd()
+        log_path = os.getcwd() if self.resume_path is None else self.resume_path
         self.logger = rllogging.TrainingLogger(log_path)
         self.state_writer = rllogging.StateWriter(log_path)
         self.env = episodic_async_env.EpisodicAsync(
@@ -147,7 +149,7 @@ class Trainer:
         return self.tasks_sampler(self.config.training.task_batch_size, train)
 
     @classmethod
-    def from_pickle(cls, config: DictConfig, state_path) -> "Trainer":
+    def from_pickle(cls, config: DictConfig, state_path: str) -> "Trainer":
         with open(state_path, "rb") as f:
             make_env, env_rs, agent, epoch, step, task_sampler = cloudpickle.load(
                 f
@@ -162,6 +164,7 @@ class Trainer:
             seeds=env_rs,
             agent=agent,
             step=step,
+            resume_path=os.path.dirname(state_path),
         )
 
     @property
