@@ -24,7 +24,6 @@ class Trainer:
         start_epoch: int = 0,
         step: int = 0,
         seeds: Optional[List[int]] = None,
-        resume_path: Optional[str] = None,
     ):
         self.config = config
         self.agent = agent
@@ -36,10 +35,9 @@ class Trainer:
         self.logger: Optional[rllogging.TrainingLogger] = None
         self.state_writer: Optional[rllogging.StateWriter] = None
         self.env: Optional[episodic_async_env.EpisodicAsync] = None
-        self.resume_path = resume_path
 
     def __enter__(self):
-        log_path = os.getcwd() if self.resume_path is None else self.resume_path
+        log_path = os.getcwd()
         self.logger = rllogging.TrainingLogger(log_path)
         self.state_writer = rllogging.StateWriter(log_path)
         self.env = episodic_async_env.EpisodicAsync(
@@ -61,6 +59,8 @@ class Trainer:
                 self.config,
                 self.logger,
             )
+        else:
+            self.agent.logger = self.logger
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -164,7 +164,6 @@ class Trainer:
             seeds=env_rs,
             agent=agent,
             step=step,
-            resume_path=os.path.dirname(state_path),
         )
 
     @property

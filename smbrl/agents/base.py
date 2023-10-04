@@ -1,3 +1,4 @@
+import os
 from omegaconf import DictConfig
 
 from smbrl import types
@@ -40,4 +41,4 @@ class AgentBase(types.Agent):
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        self.logger = TrainingLogger(self.config.log_dir)
+        self.logger = TrainingLogger(os.getcwd())
